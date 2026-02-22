@@ -1,0 +1,84 @@
+# Copyright 2026 Joffrey TREBOT (Wheatfield Studio)
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from app.routers import sse, messages, streamable_http
+from app.core.logging import setup_logging
+from app import tools  # noqa: F401
+import logging
+import os
+
+setup_logging()
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="LumApps MCP Server")
+
+_origins = [
+    "http://localhost:6274",
+    "http://127.0.0.1:6274",
+]
+if extra := os.getenv("CORS_ORIGINS", "").strip():
+    _origins.extend(o.strip() for o in extra.split(",") if o.strip())
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+app.include_router(streamable_http.router)
+app.include_router(sse.router)
+app.include_router(messages.router)
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+@app.get("/")
+@app.post("/")
+async def root(request: Request):
+    try:
+        body = await request.json()
+        if (isinstance(body, dict) and body.get("jsonrpc") == "2.0") or \
+           (isinstance(body, list) and len(body) > 0 and isinstance(body[0], dict) and body[0].get("jsonrpc") == "2.0"):
+            
+            method = body.get("method") if isinstance(body, dict) else "batch"
+            logger.info(f"Handling JSON-RPC request at root URL: {method}")
+            from app.jsonrpc.models import JSONRPCRequest
+            from app.jsonrpc.dispatcher import dispatcher
+            
+            if isinstance(body, list):
+                results = []
+                for item in body:
+                    rpc_req = JSONRPCRequest(**item)
+                    results.append(await dispatcher.dispatch(rpc_req))
+                return results
+            else:
+                rpc_req = JSONRPCRequest(**body)
+                return await dispatcher.dispatch(rpc_req)
+    except Exception as e:
+        logger.debug(f"Root endpoint: Not a valid JSON-RPC request or error: {e}")
+        pass
+
+    return {
+        "message": "LumApps MCP Server is running",
+        "docs": "/docs",
+        "endpoints": {
+            "mcp": "/mcp",
+            "sse": "/sse",
+            "messages": "/messages"
+        }
+    }

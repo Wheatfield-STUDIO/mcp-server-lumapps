@@ -1,0 +1,210 @@
+# LumApps MCP Server by Wheatfield Studio
+
+**MCP (Model Context Protocol) server to connect the LumApps API to AI assistants** (Microsoft Copilot Studio, Cursor, Claude, etc.). This project contributes to the MCP ecosystem by turning a LumApps intranet into an active knowledge base for AI.
+
+---
+
+## Overview
+
+This server exposes the LumApps API as **MCP tools**: content search, article retrieval, directory, useful links (Directory Entries), layout and style inspection, and CSS/widget style updates. Assistants can query and use your intranet content in a structured way.
+
+- **Protocol**: MCP (Streamable HTTP 2025-06-18, with SSE compatibility)
+- **Stack**: FastAPI, Python 3.11
+- **Authentication**: API key (header or query) + LumApps OAuth2 (client credentials or token)
+
+---
+
+## Architecture
+
+```
+┌─────────────────┐     MCP (Streamable HTTP / SSE)     ┌──────────────────┐
+│  Cursor /       │ ◄─────────────────────────────────► │  FastAPI MCP     │
+│  Copilot Studio │         X-API-Key or Bearer         │  Server          │
+└─────────────────┘                                     └────────┬─────────┘
+                                                                 │
+                                                                 │ OAuth2 / API
+                                                                 ▼
+                                                        ┌──────────────────┐
+                                                        │  LumApps API     │
+                                                        │  (sites.lumapps) │
+                                                        └──────────────────┘
+```
+
+- **`/mcp`**: **Streamable HTTP** transport (recommended) — single GET/POST endpoint for the MCP protocol.
+- **`/sse`** + **`/messages`**: SSE transport (legacy) for older clients.
+- **MCP tools**: registered in `app/tools/` (search, content, people, useful links, layout/CSS inspection, style updates).
+
+---
+
+## Prerequisites
+
+- Python 3.10+
+- LumApps account with API access (client ID/secret or token)
+- API key to secure MCP server access
+
+---
+
+## Installation
+
+```bash
+git clone https://github.com/<your-org>/lumapps-mcp-server.git
+cd lumapps-mcp-server
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### Configuration
+
+1. Copy the example file and set your variables:
+
+```bash
+cp .env.example .env
+# Edit .env with your values (see below)
+```
+
+2. **Required variables**:
+   - `MCP_API_KEY`: key shared with MCP clients (Cursor, Copilot Studio, etc.).
+   - `LUMAPPS_ORG_ID`: LumApps organization ID.
+   - Either `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`, or `LUMAPPS_ACCESS_TOKEN` (for testing).
+
+3. **Optional variables**:
+   - `MCP_PUBLIC_URL`: public server URL (e.g. devtunnel/ngrok) so clients get the correct URL in MCP events.
+   - `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`: second LumApps OAuth app with **all.admin** scope (see [Read vs admin credentials](#read-vs-admin-credentials) below).
+   - `CORS_ORIGINS`: extra CORS origins (comma-separated).
+   - `LOG_LEVEL`, `MAX_SEARCH_RESULTS`, etc.
+
+**Important**: never commit the `.env` file (it is listed in `.gitignore`).
+
+### Read vs admin credentials
+
+LumApps OAuth applications are created with a fixed scope: **all.read** (read-only) or **all.admin** (read + write). This server separates **end-user tools** (read) from **admin tools** (modifications) by using two credential pairs when both are configured:
+
+| Purpose | Env vars | LumApps scope | Tools |
+|--------|----------|----------------|--------|
+| **Read (end users)** | `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET` | **all.read** | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`, `inspect_lumapps_element` |
+| **Admin (modifications)** | `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET` | **all.admin** | `update_global_css`, `update_widget_style`, `update_site_global_settings` |
+
+- **Recommended setup**: Create **two OAuth applications** in LumApps for the same organization: one with **all.read** (for end-user search and inspection), one with **all.admin** (for CSS and widget updates). Set the read app in `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET` and the admin app in `LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`. The server will use the read app for read tools and the admin app for modification tools; tokens are cached per user and per profile.
+- **Read-only deployment**: If you only set the read credentials, **modification tools will not work**. Calling `update_global_css`, `update_widget_style` or `update_site_global_settings` will return a clear error asking you to configure the admin credentials.
+- **Single token (tests)**: If you set `LUMAPPS_ACCESS_TOKEN`, that token is used for both read and admin; no separate admin credentials are needed. The token must have the scope required by the tools you use (admin scope if you call modification tools).
+
+---
+
+## Running
+
+### Local
+
+```bash
+uvicorn app.main:app --reload --port 8000
+```
+
+- API: <http://localhost:8000>
+- Docs: <http://localhost:8000/docs>
+- MCP endpoint (Streamable HTTP): <http://localhost:8000/mcp>
+
+### Docker
+
+```bash
+docker compose up --build
+```
+
+**Connecting clients:**
+
+- **Cursor** (local): use URL `http://localhost:8000/mcp` and the key set in `MCP_API_KEY`.
+- **Copilot Studio** cannot use localhost; it needs a **public URL**. Options:
+  - **Tunnel** (dev or demo): expose the server with [devtunnel](https://github.com/microsoft/devtunnel) or [ngrok](https://ngrok.com), then set `MCP_PUBLIC_URL` in `.env` and use the tunnel URL (e.g. `https://xxxx.devtunnels.ms/mcp`) in Copilot Studio. See [Testing with devtunnel and MCP Inspector](docs/DEVTUNNEL_INSPECTOR.md).
+  - **Production**: host the server on a real environment (e.g. Azure, AWS) and use that public base URL + `/mcp` in Copilot Studio.
+
+---
+
+## Exposed MCP tools
+
+| Tool                      | Description                                             | Credentials   |
+| ------------------------- | ------------------------------------------------------- | ------------- |
+| `search_content`          | Search LumApps content (titles, excerpts, `content_id`) | read (all.read) |
+| `get_content_body`        | Get full article body by `content_id`                   | read          |
+| `find_person`             | Search people in the directory                          | read          |
+| `get_useful_links`        | Search useful links (Directory Entries: train, IT, training, etc.) | read          |
+| `search_site`             | List or search LumApps sites (instances) for discovery and user confirmation | read          |
+| `inspect_lumapps_element` | Inspect page layout or site global CSS (API only)       | read          |
+| `update_global_css`           | Update site global CSS                                  | admin (all.admin) |
+| `update_widget_style`         | Update a widget's style on a page                       | admin             |
+| `update_site_global_settings` | Update site footer HTML and/or head scripts             | admin             |
+
+Read tools use the **read** LumApps app (`LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`); modification tools use the **admin** app (`LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`) when configured. See [Read vs admin credentials](#read-vs-admin-credentials).
+
+### Conduct rules for modification tools
+
+The tool schemas for **`update_widget_style`**, **`update_global_css`** and **`update_site_global_settings`** instruct the AI to follow strict rules so changes are never applied without user consent:
+
+1. **Always run `inspect_lumapps_element` first** — to get accurate `content_id`/`widget_id` or to target the right elements before changing CSS.
+2. **Present the modification to the user** — describe or show what will be changed (no need to expose raw JSON or CSS unless useful).
+3. **Wait for explicit confirmation** — do not call the tool until the user has replied with "Yes" or "Confirm" (or equivalent) in the chat.
+4. **Never apply changes silently** — the AI must not invoke these tools without having obtained confirmation.
+
+These rules are embedded in the tools’ `description` in the MCP schema so that assistants (Copilot Studio, Cursor, etc.) read them and behave accordingly. Use **`search_site`** to list available sites and ask the user which one to use (e.g. "I found 'Sustainability Global' and 'Sustainability France'; which one do you want to modify?") before running modification tools.
+
+---
+
+## MCP Resources
+
+Static or semi-static documentation exposed as MCP resources (clients can list and read them directly for context):
+
+| URI                                                      | Description                                                                                                   |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `lumapps://lumapps-mcp-server/css-variables`             | LumApps CSS variables reference (static doc).                                                                 |
+| `lumapps://lumapps-mcp-server/layout-and-widget-styling` | Layout (rows, cells, sticky), row/cell and widget styles (spacing, border, background, header/footer, hover). |
+| `lumapps://lumapps-mcp-server/style-and-theme`          | Site style (theme): structure, properties, stylesheets, footer/head, style/save flow.                         |
+| `lumapps://lumapps-mcp-server/customizations-api`      | Customizations API: JavaScript (targets, placements, components) and CSS (anchors, best practices).         |
+
+Content is stored in `app/resources/` and can be updated without code changes.
+
+---
+
+## Security
+
+- **MCP authentication**: all MCP routes (`/mcp`, `/sse`, `/messages`) require a valid key (`X-API-Key`, `Authorization: Bearer`, or query params `apiKey` / `token`).
+- **Secrets**: no hardcoded secrets; everything comes from config (`pydantic-settings` + `.env`).
+- **`.env`**: for local development only; must not be versioned. In production use environment variables or a secrets store.
+
+---
+
+## Demos
+
+Videos are in **`assets/videos/`** (tracked with Git LFS). Main recap:
+
+<video src="assets/videos/lumapps-mcp-master-recap.mp4" controls width="100%">
+  Your browser does not support the video tag.
+</video>
+
+| Feature | Video |
+| -------- | ----- |
+| **Search** | [01-deep-content-search.mp4](assets/videos/01-deep-content-search.mp4) |
+| **People** | [02-people-expertise-discovery.mp4](assets/videos/02-people-expertise-discovery.mp4) |
+| **Links** | [03-smart-intent-links.mp4](assets/videos/03-smart-intent-links.mp4) |
+| **Drafting** | [04-ai-content-drafting.mp4](assets/videos/04-ai-content-drafting.mp4) |
+| **Design** | [05-visual-layout-engineering.mp4](assets/videos/05-visual-layout-engineering.mp4) |
+| **Architect** | [06-global-site-architecture.mp4](assets/videos/06-global-site-architecture.mp4) |
+
+---
+
+## Further documentation
+
+- [Testing with devtunnel and MCP Inspector](docs/DEVTUNNEL_INSPECTOR.md) — running behind a tunnel and using the MCP Inspector.
+
+---
+
+## License
+
+This project is open source under the [Apache License 2.0](LICENSE).
+
+---
+
+## Contributing
+
+Contributions are welcome (issues, pull requests). Please read [CONTRIBUTING.md](CONTRIBUTING.md) for how to test your changes with the MCP Inspector before submitting. For larger changes, open an issue first to discuss.
+
+---
+
+*Disclaimer: This is a community-driven project and is not officially affiliated with or endorsed by LumApps.*

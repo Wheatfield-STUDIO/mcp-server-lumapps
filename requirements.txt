@@ -1,0 +1,10 @@
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+sse-starlette>=2.0.0
+httpx>=0.26.0
+beautifulsoup4>=4.12.0
+tenacity>=8.2.0
+pydantic-settings>=2.1.0
+python-json-logger>=2.0.7
+python-dotenv>=1.0.0
+python-slugify>=4.0.1,<5.0.0

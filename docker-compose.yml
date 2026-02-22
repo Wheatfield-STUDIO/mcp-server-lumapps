@@ -1,0 +1,10 @@
+# Run: docker compose up --build
+# Then configure Cursor/Copilot with URL http://localhost:8000/mcp
+services:
+  mcp:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    init: true
