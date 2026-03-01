@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **RBAC LumApps native permissions**: when `RBAC_USE_LUMAPPS_NATIVE=true` (default), permissions use LumApps APIs and the LumApps user token payload. **Global Admin**: claim `isOrgAdmin: true` in the **LumApps user token** (obtained via impersonation), not in the OIDC JWT (`RBAC_ORG_ADMIN_CLAIM`). **Site Admin (Structural)**: `GET service/front-init?fields=user` → `user.instancesSuperAdmin`, `user.isSuperAdmin`. **Content (canEdit)**: `GET content/get?uid=...&fields=canEdit`. Fallback to OIDC role patterns when `RBAC_USE_LUMAPPS_NATIVE=false`.
+- **User-level RBAC**: tool execution is gated by authenticated user role, not just app credentials. Read tools remain available to all; **Content** tools (`inspect_lumapps_element`, `update_widget_style`) require Contributor or Admin for the target page/site; **Structural** tools (`update_global_css`, `update_site_global_settings`) require Site Administrator for the target site. Global Admin is supported via a single claim (e.g. `lumapps:site:*:admin`) so tokens do not list hundreds of sites. OIDC role patterns are configurable (`RBAC_ADMIN_PATTERNS`, `RBAC_CONTRIBUTOR_PATTERNS`, `RBAC_GLOBAL_ADMIN_PATTERNS`). When `RBAC_DENY_API_KEY_FOR_NON_READ=true`, API key alone cannot run Content or Structural tools. A short TTL cache resolves `content_id` → `site_id` for widget updates. See README (User-level RBAC).
 - **OIDC (SSO) authentication**: provider-agnostic OpenID Connect support so the server can authenticate users via corporate IdPs (Azure AD / Entra ID, Okta, Ping Identity). Bearer tokens are validated (signature via JWKS, issuer, audience, expiry) and identity is bound to tool execution.
 - **Dual-mode MCP auth**: `AUTH_MODE=oidc_preferred` (default) tries Bearer as OIDC JWT first, then falls back to static API key when `AUTH_ALLOW_API_KEY_FALLBACK=true`. `AUTH_MODE=api_key_only` keeps legacy API-key-only behavior.
 - **UserContext and verified identity**: when OIDC succeeds, `user_email` is resolved from token claims (`email`, `preferred_username`, `upn`) and injected into tool calls; client-supplied `user_email` is rejected if it does not match the token.
@@ -28,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **Verified user identity**: every tool call when using OIDC is tied to the authenticated user from the IdP; no client-controlled `user_email` in that mode.
+- **RBAC**: Structural and Content tools require OIDC identity and the appropriate site role (or Global Admin); API key is read-only when RBAC is enabled. LumApps 401/403 on writes are surfaced as governance-friendly messages.
 - Container runs as non-root user (UID/GID 1000).
 - Credentials injected via environment only (ConfigMap/Secret); no hardcoded secrets in image.
 

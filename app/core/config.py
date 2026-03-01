@@ -57,6 +57,21 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     MAX_SEARCH_RESULTS: int = 5
 
+    # RBAC: user-level role checks
+    RBAC_ENABLED: bool = True
+    # When True, use LumApps native permissions (front-init, content/get canEdit, and LumApps token payload isOrgAdmin)
+    RBAC_USE_LUMAPPS_NATIVE: bool = True
+    # Claim in the LumApps user token payload for platform Global Admin (e.g. isOrgAdmin: true)
+    RBAC_ORG_ADMIN_CLAIM: str = "isOrgAdmin"
+    # Only used when RBAC_USE_LUMAPPS_NATIVE is False: OIDC role claim and patterns (ignored when using LumApps native)
+    RBAC_ROLE_CLAIM: str = "groups"
+    RBAC_ADMIN_PATTERNS: str = "lumapps:site:{site_id}:admin"
+    RBAC_CONTRIBUTOR_PATTERNS: str = "lumapps:site:{site_id}:contributor,lumapps:site:{site_id}:admin"
+    RBAC_GLOBAL_ADMIN_PATTERNS: str = "lumapps:site:*:admin,lumapps:global:admin"
+    RBAC_DENY_API_KEY_FOR_NON_READ: bool = True
+    RBAC_CONTENT_SITE_CACHE_TTL_SECONDS: int = 300
+    RBAC_CONTENT_SITE_CACHE_MAX_SIZE: int = 500
+
     @model_validator(mode="after")
     def check_lumapps_auth(self):
         if self.LUMAPPS_ACCESS_TOKEN:

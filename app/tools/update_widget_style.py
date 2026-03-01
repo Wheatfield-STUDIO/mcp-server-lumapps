@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Tuple
 
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
+from app.tools.api_error_utils import is_permission_denied, PERMISSION_DENIED_MESSAGE
 
 logger = logging.getLogger(__name__)
 
@@ -157,13 +158,15 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         layout = await lumapps_client.get_content_layout(content_id, token=token)
     except Exception as e:
         logger.exception("get_content_layout failed")
-        return {"content": [{"type": "text", "text": f"Failed to load layout: {e}"}]}
+        text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Failed to load layout: {e}"
+        return {"content": [{"type": "text", "text": text}]}
 
     try:
         ok, msg = await _save_via_content(content_id, widget_id, style_updates, token, layout)
     except Exception as e:
         logger.exception("save via content failed")
-        return {"content": [{"type": "text", "text": f"Save failed: {e}"}]}
+        text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Save failed: {e}"
+        return {"content": [{"type": "text", "text": text}]}
 
     if not ok:
         return {"content": [{"type": "text", "text": msg}]}
