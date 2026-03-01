@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from fastapi import APIRouter, Depends, Request, Header
-from app.core.security import validate_api_key_header_or_query
+from app.core.security import AuthResult, validate_api_key_header_or_query
 from app.jsonrpc.models import JSONRPCRequest, JSONRPCResponse
 from app.jsonrpc.dispatcher import dispatcher
 from app.routers.sse import sse_queues
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 async def messages_endpoint(
     request: Request,
     rpc_request: Union[JSONRPCRequest, List[JSONRPCRequest]],
-    api_key: str = Depends(validate_api_key_header_or_query),
+    auth_result: AuthResult = Depends(validate_api_key_header_or_query),
     mcp_session_id: Optional[str] = Header(None, alias="mcp-session-id"),
 ):
     session_id = mcp_session_id or request.query_params.get("mcp-session-id")

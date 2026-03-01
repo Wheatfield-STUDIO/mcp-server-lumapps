@@ -14,7 +14,7 @@
 
 from fastapi import APIRouter, Depends, Request
 from sse_starlette import EventSourceResponse
-from app.core.security import validate_api_key_header_or_query
+from app.core.security import AuthResult, validate_api_key_header_or_query
 from app.core.config import settings
 import asyncio
 import logging
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 sse_queues = {}
 
 @router.get("/sse")
-async def sse_endpoint(request: Request, api_key: str = Depends(validate_api_key_header_or_query)):
+async def sse_endpoint(request: Request, auth_result: AuthResult = Depends(validate_api_key_header_or_query)):
     session_id = str(uuid.uuid4())
     queue = asyncio.Queue()
     sse_queues[session_id] = queue

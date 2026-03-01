@@ -10,7 +10,7 @@ This server exposes the LumApps API as **MCP tools**: content search, article re
 
 - **Protocol**: MCP (Streamable HTTP 2025-06-18, with SSE compatibility)
 - **Stack**: FastAPI, Python 3.11
-- **Authentication**: API key (header or query) + LumApps OAuth2 (client credentials or token)
+- **Authentication**: **OIDC (SSO) preferred** (Bearer JWT from Azure AD, Okta, Ping, etc.) with optional API key fallback; LumApps OAuth2 (client credentials or token) for backend
 
 ---
 
@@ -64,11 +64,14 @@ cp .env.example .env
 ```
 
 2. **Required variables**:
-   - `MCP_API_KEY`: key shared with MCP clients (Cursor, Copilot Studio, etc.).
+   - **Auth**: either `OIDC_ISSUER_URL` (for SSO) or `MCP_API_KEY` with `AUTH_ALLOW_API_KEY_FALLBACK=true` (see [SSO / OIDC](#sso--oidc-enterprise)).
    - `LUMAPPS_ORG_ID`: LumApps organization ID.
    - Either `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`), or `LUMAPPS_ACCESS_TOKEN` (for testing).
 
 3. **Optional variables**:
+   - `AUTH_MODE`: `oidc_preferred` (default) or `api_key_only`. With `api_key_only`, only `MCP_API_KEY` is accepted.
+   - `AUTH_ALLOW_API_KEY_FALLBACK`: when `oidc_preferred`, allow static API key if no Bearer token (default `true`; set `false` for SSO-only).
+   - `OIDC_ISSUER_URL`, `OIDC_AUDIENCE`, `OIDC_CLIENT_ID`, `OIDC_EMAIL_CLAIM`, `OIDC_USERNAME_CLAIM`, `OIDC_CLOCK_SKEW_SECONDS`: see [SSO / OIDC](#sso--oidc-enterprise) and `.env.example`.
    - `MCP_PUBLIC_URL`: public server URL (e.g. devtunnel/ngrok) so clients get the correct URL in MCP events.
    - `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`: second LumApps OAuth app with **all.admin** scope (see [Read vs admin credentials](#read-vs-admin-credentials) below).
    - `CORS_ORIGINS`: extra CORS origins (comma-separated).
@@ -200,9 +203,24 @@ Content is stored in `app/resources/` and can be updated without code changes.
 
 ## Security
 
-- **MCP authentication**: all MCP routes (`/mcp`, `/sse`, `/messages`) require a valid key (`X-API-Key`, `Authorization: Bearer`, or query params `apiKey` / `token`).
+- **MCP authentication**: dual mode.
+  - **OIDC preferred** (default): send `Authorization: Bearer <user-id-token>` from your IdP (Azure AD, Okta, Ping, etc.). The server validates the JWT (signature, issuer, audience, expiry) and binds every tool call to the verified user; `user_email` is taken from token claims and must not be overridden by the client.
+  - **API key fallback**: when `AUTH_ALLOW_API_KEY_FALLBACK=true`, you can still use `X-API-Key`, `Authorization: Bearer <static-key>`, or query `apiKey` / `token` with `MCP_API_KEY`. For production SSO-only, set `AUTH_ALLOW_API_KEY_FALLBACK=false`.
+- **Root endpoint**: `GET /` is unauthenticated (info only). `POST /` accepts JSON-RPC only when authenticated (same as `/mcp`).
 - **Secrets**: no hardcoded secrets; everything comes from config (`pydantic-settings` + `.env`).
 - **`.env`**: for local development only; must not be versioned. In production use environment variables or a secrets store.
+
+### SSO / OIDC (enterprise)
+
+To use corporate SSO and tie every action to a verified human identity:
+
+1. Set **`OIDC_ISSUER_URL`** to your IdP’s issuer (e.g. `https://login.microsoftonline.com/<tenant>/v2.0` for Microsoft Entra ID).
+2. Optionally set **`OIDC_DISCOVERY_URL`** if discovery is not at `{OIDC_ISSUER_URL}/.well-known/openid-configuration`.
+3. Set **`OIDC_AUDIENCE`** and/or **`OIDC_CLIENT_ID`** to the values your IdP expects in the token’s `aud` claim.
+4. Configure **`OIDC_EMAIL_CLAIM`** and **`OIDC_USERNAME_CLAIM`** if your IdP uses different claim names (defaults: `email`, `preferred_username`).
+5. Have the MCP client (Copilot Studio, Cursor, etc.) obtain an identity token for the current user and send it as `Authorization: Bearer <token>` on each request.
+
+The server then uses the token’s claims to resolve `user_email` for LumApps; client-supplied `user_email` in tool arguments is ignored or rejected when it does not match the token. This meets GDPR/SOC2-style requirements for user identification and revocation.
 
 ---
 
@@ -222,6 +240,19 @@ Videos are in **`assets/videos/`** (tracked with Git LFS). Main recap:
 | **Drafting** | [04-ai-content-drafting.mp4](assets/videos/04-ai-content-drafting.mp4) |
 | **Design** | [05-visual-layout-engineering.mp4](assets/videos/05-visual-layout-engineering.mp4) |
 | **Architect** | [06-global-site-architecture.mp4](assets/videos/06-global-site-architecture.mp4) |
+
+---
+
+## Tests
+
+Auth and endpoint regression tests live in `tests/`. Run them with:
+
+```bash
+pip install -r requirements.txt
+python -m pytest tests/ -v
+```
+
+Requires minimal env (or defaults in `tests/conftest.py`): `MCP_API_KEY`, `LUMAPPS_ORG_ID`, and LumApps read credentials so the app starts.
 
 ---
 

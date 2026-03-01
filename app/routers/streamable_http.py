@@ -20,7 +20,7 @@ Single endpoint: GET and POST /mcp.
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 from sse_starlette import EventSourceResponse
-from app.core.security import validate_api_key_header_or_query
+from app.core.security import AuthResult, validate_api_key_header_or_query
 from app.jsonrpc.models import JSONRPCRequest, JSONRPCResponse
 from app.jsonrpc.dispatcher import dispatcher
 from app.jsonrpc.errors import JSONRPCCodes
@@ -51,7 +51,7 @@ def _is_request(body: dict) -> bool:
 @router.get("/mcp")
 async def mcp_get(
     request: Request,
-    api_key: str = Depends(validate_api_key_header_or_query),
+    auth_result: AuthResult = Depends(validate_api_key_header_or_query),
 ):
     """
     Streamable HTTP: GET opens an SSE stream for server-to-client messages.
@@ -81,7 +81,7 @@ async def mcp_get(
 @router.post("/mcp")
 async def mcp_post(
     request: Request,
-    api_key: str = Depends(validate_api_key_header_or_query),
+    auth_result: AuthResult = Depends(validate_api_key_header_or_query),
 ):
     """
     Streamable HTTP: POST sends one JSON-RPC message (request, notification, or response).

@@ -14,13 +14,30 @@
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import model_validator
-from typing import Optional
+from typing import Optional, Literal
+
+AuthMode = Literal["oidc_preferred", "api_key_only"]
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    MCP_API_KEY: str
+    MCP_API_KEY: Optional[str] = None
     MCP_PUBLIC_URL: Optional[str] = None
+
+    # Auth mode: oidc_preferred (validate Bearer as OIDC JWT, optional API key fallback) or api_key_only (legacy)
+    AUTH_MODE: AuthMode = "oidc_preferred"
+    AUTH_ALLOW_API_KEY_FALLBACK: bool = True
+
+    # OIDC (provider-agnostic): issuer and discovery
+    OIDC_ISSUER_URL: Optional[str] = None
+    OIDC_DISCOVERY_URL: Optional[str] = None
+    OIDC_AUDIENCE: Optional[str] = None
+    OIDC_CLIENT_ID: Optional[str] = None
+    OIDC_SCOPES: str = "openid profile email"
+    OIDC_EMAIL_CLAIM: str = "email"
+    OIDC_USERNAME_CLAIM: str = "preferred_username"
+    OIDC_CLOCK_SKEW_SECONDS: int = 60
 
     LUMAPPS_CLIENT_ID: Optional[str] = None
     LUMAPPS_CLIENT_SECRET: Optional[str] = None
@@ -52,6 +69,23 @@ class Settings(BaseSettings):
                 "(LUMAPPS_READ_CLIENT_ID/SECRET or LUMAPPS_CLIENT_ID/LUMAPPS_CLIENT_SECRET) must be set"
             )
         return self
+
+    @model_validator(mode="after")
+    def check_mcp_auth_config(self):
+        """Ensure at least one MCP auth method is configured."""
+        if self.AUTH_MODE == "api_key_only":
+            if not self.MCP_API_KEY:
+                raise ValueError("AUTH_MODE=api_key_only requires MCP_API_KEY to be set")
+            return self
+        # oidc_preferred: need OIDC issuer or API key fallback
+        if self.OIDC_ISSUER_URL:
+            return self
+        if self.AUTH_ALLOW_API_KEY_FALLBACK and self.MCP_API_KEY:
+            return self
+        raise ValueError(
+            "AUTH_MODE=oidc_preferred requires either OIDC_ISSUER_URL to be set "
+            "or AUTH_ALLOW_API_KEY_FALLBACK=true with MCP_API_KEY set"
+        )
 
     def get_read_client_id(self) -> Optional[str]:
         """Effective read app client ID (LUMAPPS_READ_CLIENT_ID preferred, else LUMAPPS_CLIENT_ID)."""

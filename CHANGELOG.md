@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **OIDC (SSO) authentication**: provider-agnostic OpenID Connect support so the server can authenticate users via corporate IdPs (Azure AD / Entra ID, Okta, Ping Identity). Bearer tokens are validated (signature via JWKS, issuer, audience, expiry) and identity is bound to tool execution.
+- **Dual-mode MCP auth**: `AUTH_MODE=oidc_preferred` (default) tries Bearer as OIDC JWT first, then falls back to static API key when `AUTH_ALLOW_API_KEY_FALLBACK=true`. `AUTH_MODE=api_key_only` keeps legacy API-key-only behavior.
+- **UserContext and verified identity**: when OIDC succeeds, `user_email` is resolved from token claims (`email`, `preferred_username`, `upn`) and injected into tool calls; client-supplied `user_email` is rejected if it does not match the token.
+- **OIDC configuration** via environment: `OIDC_ISSUER_URL`, `OIDC_DISCOVERY_URL`, `OIDC_AUDIENCE`, `OIDC_CLIENT_ID`, `OIDC_SCOPES`, `OIDC_EMAIL_CLAIM`, `OIDC_USERNAME_CLAIM`, `OIDC_CLOCK_SKEW_SECONDS`. Documented in `.env.example`, README, and K8s ConfigMap.
+- **Auth regression tests** in `tests/test_auth.py`: unauthenticated GET `/`, health/ready, 401 without auth on POST `/mcp` and POST `/`, success with API key (header and Bearer), invalid key 401. Run with `pytest tests/ -v`.
 - **Enterprise containerization**: multi-stage Dockerfile (Python 3.11-slim), non-root runtime, minimal attack surface.
 - **Kubernetes manifests** in `k8s/`: Deployment (replicas, resource limits, rolling update), Service (ClusterIP), ConfigMap and Secret templates for configuration and credentials.
 - **Health endpoints**: `GET /health` (liveness) and `GET /ready` (readiness) for orchestrator probes.
@@ -16,10 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Root endpoint**: `GET /` is unauthenticated (info only). `POST /` accepts JSON-RPC only when authenticated (same auth as `/mcp`); unauthenticated POST returns 401.
+- **MCP_API_KEY** is optional when OIDC is configured; at least one of `OIDC_ISSUER_URL` or API key (with fallback enabled) is required.
 - Docker build context reduced via `.dockerignore` (exclusion of `assets`, `venv`, media, docs) for faster builds.
 
 ### Security
 
+- **Verified user identity**: every tool call when using OIDC is tied to the authenticated user from the IdP; no client-controlled `user_email` in that mode.
 - Container runs as non-root user (UID/GID 1000).
 - Credentials injected via environment only (ConfigMap/Secret); no hardcoded secrets in image.
 
