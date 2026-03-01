@@ -98,6 +98,27 @@ def test_authorize_structural_denied_without_user_context() -> None:
             assert "OIDC" in exc_info.value.message or "authenticated user" in exc_info.value.message.lower()
 
 
+def test_authorize_native_mode_denied_without_lumapps_token() -> None:
+    """In native mode, RBAC fails closed when LumApps token is unavailable."""
+    ctx = UserContext(
+        sub="sub1",
+        email="u@example.com",
+        upn="u@example.com",
+        issuer="https://issuer",
+        audience="aud",
+        scopes=[],
+        raw_claims={},
+    )
+    mock_settings = MagicMock()
+    mock_settings.RBAC_ENABLED = True
+    mock_settings.RBAC_USE_LUMAPPS_NATIVE = True
+    with patch("app.core.rbac.get_user_context", return_value=ctx):
+        with patch("app.core.rbac.settings", mock_settings):
+            with pytest.raises(RBACError) as exc_info:
+                asyncio.run(authorize_tool_call("update_global_css", {"site_id": "site-1", "user_email": "u@example.com"}, token=None))
+            assert "Could not verify your LumApps permissions" in exc_info.value.message
+
+
 def test_authorize_structural_denied_contributor_only() -> None:
     """User with contributor claim for site but not admin is denied for structural tool."""
     ctx = UserContext(
@@ -111,6 +132,7 @@ def test_authorize_structural_denied_contributor_only() -> None:
     )
     mock_settings = MagicMock()
     mock_settings.RBAC_ENABLED = True
+    mock_settings.RBAC_USE_LUMAPPS_NATIVE = False
     mock_settings.RBAC_ADMIN_PATTERNS = "lumapps:site:{site_id}:admin"
     mock_settings.RBAC_GLOBAL_ADMIN_PATTERNS = "lumapps:site:*:admin,lumapps:global:admin"
     mock_settings.RBAC_ROLE_CLAIM = "groups"
@@ -134,6 +156,7 @@ def test_authorize_content_allowed_contributor() -> None:
     )
     mock_settings = MagicMock()
     mock_settings.RBAC_ENABLED = True
+    mock_settings.RBAC_USE_LUMAPPS_NATIVE = False
     mock_settings.RBAC_ADMIN_PATTERNS = "lumapps:site:{site_id}:admin"
     mock_settings.RBAC_CONTRIBUTOR_PATTERNS = "lumapps:site:{site_id}:contributor,lumapps:site:{site_id}:admin"
     mock_settings.RBAC_GLOBAL_ADMIN_PATTERNS = "lumapps:site:*:admin"
@@ -163,6 +186,7 @@ def test_authorize_structural_allowed_site_admin() -> None:
     )
     mock_settings = MagicMock()
     mock_settings.RBAC_ENABLED = True
+    mock_settings.RBAC_USE_LUMAPPS_NATIVE = False
     mock_settings.RBAC_ADMIN_PATTERNS = "lumapps:site:{site_id}:admin"
     mock_settings.RBAC_GLOBAL_ADMIN_PATTERNS = "lumapps:site:*:admin"
     mock_settings.RBAC_ROLE_CLAIM = "groups"
@@ -172,7 +196,7 @@ def test_authorize_structural_allowed_site_admin() -> None:
 
 
 def test_authorize_structural_allowed_global_admin() -> None:
-    """User with global admin claim (lumapps:site:*:admin) is allowed for any site."""
+    """User with global admin claim (lumapps:site:*:admin) is allowed for any site (OIDC fallback)."""
     ctx = UserContext(
         sub="sub1",
         email="admin@example.com",
@@ -184,12 +208,41 @@ def test_authorize_structural_allowed_global_admin() -> None:
     )
     mock_settings = MagicMock()
     mock_settings.RBAC_ENABLED = True
+    mock_settings.RBAC_USE_LUMAPPS_NATIVE = False
     mock_settings.RBAC_ADMIN_PATTERNS = "lumapps:site:{site_id}:admin"
     mock_settings.RBAC_GLOBAL_ADMIN_PATTERNS = "lumapps:site:*:admin,lumapps:global:admin"
     mock_settings.RBAC_ROLE_CLAIM = "groups"
     with patch("app.core.rbac.get_user_context", return_value=ctx):
         with patch("app.core.rbac.settings", mock_settings):
             asyncio.run(authorize_tool_call("update_global_css", {"site_id": "any-site", "user_email": "admin@example.com"}))
+
+
+def test_authorize_structural_allowed_lumapps_token_org_admin() -> None:
+    """LumApps user token with isOrgAdmin: true in payload is allowed for all tools (native mode)."""
+    import jwt
+    lumapps_token = jwt.encode({"isOrgAdmin": True, "sub": "u1"}, "dummy", algorithm="HS256")
+    if hasattr(lumapps_token, "decode"):
+        lumapps_token = lumapps_token.decode("utf-8")
+    ctx = UserContext(
+        sub="sub1",
+        email="orgadmin@example.com",
+        upn="orgadmin@example.com",
+        issuer="https://issuer",
+        audience="aud",
+        scopes=[],
+        raw_claims={},
+    )
+    mock_settings = MagicMock()
+    mock_settings.RBAC_ENABLED = True
+    mock_settings.RBAC_USE_LUMAPPS_NATIVE = True
+    mock_settings.RBAC_ORG_ADMIN_CLAIM = "isOrgAdmin"
+    with patch("app.core.rbac.get_user_context", return_value=ctx):
+        with patch("app.core.rbac.settings", mock_settings):
+            asyncio.run(authorize_tool_call(
+                "update_global_css",
+                {"site_id": "any-site", "user_email": "orgadmin@example.com"},
+                token=lumapps_token,
+            ))
 
 
 def test_user_has_global_admin() -> None:

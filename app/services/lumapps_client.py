@@ -89,7 +89,38 @@ class LumAppsClient:
         logger.info(f"LumApps API returned {len(items)} items.")
         return items
 
-    async def get_content(self, content_id: str, token: str, lang: str = None) -> Dict[str, Any]:
+    async def get_front_init_user(self, token: str) -> Dict[str, Any]:
+        """
+        Get current user context from LumApps front-init (impersonated by token).
+        GET service/front-init?fields=user
+        Returns: { "user": { "instancesSuperAdmin": ["id1", "id2"], "isSuperAdmin": bool } }
+        Used for RBAC: site admin list and global admin flag.
+        """
+        path = "service/front-init"
+        params = {"fields": "user"}
+        try:
+            data = await self._request("GET", path, token=token, params=params)
+            return data.get("user") or {}
+        except httpx.HTTPStatusError as e:
+            logger.warning("front-init user failed: %s %s", e.response.status_code, e.response.text[:200] if e.response.text else "")
+            raise
+
+    async def get_content_can_edit(self, content_id: str, token: str) -> bool:
+        """
+        Check if the current user (impersonated by token) can edit this content (page).
+        GET _ah/api/lumsites/v1/content/get?uid=...&fields=canEdit
+        Returns True only when canEdit is true in the response.
+        """
+        path = "_ah/api/lumsites/v1/content/get"
+        params = {"uid": content_id, "fields": "canEdit"}
+        try:
+            data = await self._request("GET", path, token=token, params=params)
+            return bool(data.get("canEdit") is True)
+        except httpx.HTTPStatusError as e:
+            logger.warning("content/get canEdit failed for %s: %s", content_id, e.response.status_code)
+            return False
+
+    async def get_content(self, content_id: str, token: str, lang: str = None, fields: str = None) -> Dict[str, Any]:
         """
         Get a single content (page) by uid. Returns the full content object.
         GET _ah/api/lumsites/v1/content/get?uid=...
@@ -101,7 +132,9 @@ class LumAppsClient:
         params = {"uid": content_id}
         if lang:
             params["lang"] = lang
-        
+        if fields:
+            params["fields"] = fields
+
         try:
             return await self._request("GET", path, token=token, params=params)
         except httpx.HTTPStatusError as e:

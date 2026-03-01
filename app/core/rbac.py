@@ -13,8 +13,9 @@
 # limitations under the License.
 
 """
-User-level RBAC: tool sensitivity, OIDC role mapping (including Global Admin),
-site resolution with content_id -> site_id cache, and pre-execution authorization.
+User-level RBAC: tool sensitivity and authorization.
+Uses LumApps native permissions (front-init instancesSuperAdmin, content/get canEdit)
+and LumApps token payload isOrgAdmin when RBAC_USE_LUMAPPS_NATIVE is True; otherwise OIDC role patterns.
 """
 
 import asyncio
@@ -129,15 +130,60 @@ def _user_has_site_role(
     return False
 
 
+def _lumapps_token_is_org_admin(lumapps_token: str) -> bool:
+    """
+    True if the LumApps user token payload contains the Global Admin flag (e.g. isOrgAdmin: true).
+    Source: payload of the token obtained via impersonation (OAuth2 + user email), not OIDC.
+    """
+    if not lumapps_token or not isinstance(lumapps_token, str):
+        return False
+    claim_name = getattr(settings, "RBAC_ORG_ADMIN_CLAIM", "isOrgAdmin") or "isOrgAdmin"
+    try:
+        import jwt
+        payload = jwt.decode(lumapps_token, options={"verify_signature": False})
+        val = payload.get(claim_name)
+        return val is True or (isinstance(val, str) and val.lower() in ("true", "1"))
+    except Exception:
+        return False
+
+
+async def _user_is_site_admin_lumapps(token: str, site_id: str) -> bool:
+    """
+    True if user (impersonated by token) is Site Admin for site_id or Global Admin.
+    Uses LumApps GET service/front-init?fields=user -> instancesSuperAdmin, isSuperAdmin.
+    """
+    from app.services.lumapps_client import lumapps_client
+    try:
+        user = await lumapps_client.get_front_init_user(token)
+    except Exception as e:
+        logger.warning("RBAC front-init failed: %s", e)
+        return False
+    if user.get("isSuperAdmin") is True:
+        return True
+    instances = user.get("instancesSuperAdmin") or []
+    if not isinstance(instances, list):
+        return False
+    return site_id in instances or any(str(s) == site_id for s in instances)
+
+
+async def _content_can_edit_lumapps(token: str, content_id: str) -> bool:
+    """
+    True if user (impersonated by token) can edit this content (page).
+    Uses LumApps content/get?uid=...&fields=canEdit.
+    """
+    from app.services.lumapps_client import lumapps_client
+    return await lumapps_client.get_content_can_edit(content_id, token)
+
+
 def _user_is_admin_for_site(ctx: UserContext, site_id: str) -> bool:
-    """True if user has global admin or site-scoped admin for site_id."""
+    """True if user has global admin or site-scoped admin for site_id (OIDC patterns only)."""
     if _user_has_global_admin(ctx.raw_claims):
         return True
     return _user_has_site_role(ctx.raw_claims, site_id, "admin")
 
 
 def _user_is_contributor_or_admin_for_site(ctx: UserContext, site_id: str) -> bool:
-    """True if user has contributor or admin for site_id (or global admin)."""
+    """True if user has contributor or admin for site_id (OIDC patterns only)."""
     if _user_has_global_admin(ctx.raw_claims):
         return True
     if _user_has_site_role(ctx.raw_claims, site_id, "admin"):
@@ -242,7 +288,7 @@ async def authorize_tool_call(
     """
     Enforce user-level RBAC. Raises RBACError with a secure message if not allowed.
     When RBAC is disabled, returns without raising.
-    token: optional read token for content_id -> site_id resolution (e.g. update_widget_style).
+    token: optional LumApps user token used by native RBAC checks and site resolution.
     """
     if not getattr(settings, "RBAC_ENABLED", True):
         return
@@ -262,7 +308,56 @@ async def authorize_tool_call(
             )
         return
 
-    # CONTENT and STRUCTURAL require a resolvable site for role check
+    use_native = getattr(settings, "RBAC_USE_LUMAPPS_NATIVE", True)
+
+    # A. Global Admin (Platform): isOrgAdmin in LumApps user token payload — allow without further checks
+    if use_native and token and _lumapps_token_is_org_admin(token):
+        return
+
+    # In native mode, fail closed when user token is unavailable.
+    # Fallback OIDC patterns are only for RBAC_USE_LUMAPPS_NATIVE=false.
+    if use_native and not token:
+        raise RBACError(
+            "Could not verify your LumApps permissions for this action. "
+            "Make sure user impersonation credentials are configured and try again."
+        )
+
+    if use_native and token:
+        site_id = await resolve_target_site_id(tool_name, arguments, token=token)
+
+        if sensitivity == "structural":
+            if not site_id:
+                raise RBACError(
+                    "Could not determine the target site for this action. "
+                    "Provide site_id (or content_id for widget updates) and try again."
+                )
+            if await _user_is_site_admin_lumapps(token, site_id):
+                return
+            raise RBACError(
+                "You have rights to edit content, but global design and architecture changes "
+                "require Site Administrator privileges for this site."
+            )
+
+        # CONTENT: canEdit for the page, or Site Admin when only site_id (e.g. inspect global CSS)
+        content_id = (arguments.get("content_id") or "").strip() if isinstance(arguments.get("content_id"), str) else None
+        if content_id:
+            if await _content_can_edit_lumapps(token, content_id):
+                return
+            raise RBACError(
+                "You do not have permission to edit this page. Only users with edit rights on this content can use this action."
+            )
+        if site_id and await _user_is_site_admin_lumapps(token, site_id):
+            return
+        if not site_id:
+            raise RBACError(
+                "Could not determine the target site or content for this action. "
+                "Provide content_id or site_id so your role can be verified."
+            )
+        raise RBACError(
+            "You do not have Contributor or Administrator rights for this site."
+        )
+
+    # Fallback: OIDC role patterns (no LumApps API calls)
     if sensitivity == "structural":
         site_id = await resolve_target_site_id(tool_name, arguments, token=token)
         if not site_id:
@@ -276,7 +371,6 @@ async def authorize_tool_call(
                 "require Site Administrator privileges for this site."
             )
     else:
-        # CONTENT: require contributor or admin for site (e.g. update_widget_style targets a page/site)
         site_id = await resolve_target_site_id(tool_name, arguments, token=token)
         if not site_id:
             raise RBACError(

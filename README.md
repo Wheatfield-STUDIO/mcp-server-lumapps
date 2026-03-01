@@ -74,7 +74,7 @@ cp .env.example .env
    - `OIDC_ISSUER_URL`, `OIDC_AUDIENCE`, `OIDC_CLIENT_ID`, `OIDC_EMAIL_CLAIM`, `OIDC_USERNAME_CLAIM`, `OIDC_CLOCK_SKEW_SECONDS`: see [SSO / OIDC](#sso--oidc-enterprise) and `.env.example`.
    - `MCP_PUBLIC_URL`: public server URL (e.g. devtunnel/ngrok) so clients get the correct URL in MCP events.
    - `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`: second LumApps OAuth app with **all.admin** scope (see [Read vs admin credentials](#read-vs-admin-credentials) below).
-   - **RBAC** (see [User-level RBAC](#user-level-rbac)): `RBAC_ENABLED`, `RBAC_ROLE_CLAIM`, `RBAC_ADMIN_PATTERNS`, `RBAC_CONTRIBUTOR_PATTERNS`, `RBAC_GLOBAL_ADMIN_PATTERNS`, `RBAC_DENY_API_KEY_FOR_NON_READ`, `RBAC_CONTENT_SITE_CACHE_TTL_SECONDS`, `RBAC_CONTENT_SITE_CACHE_MAX_SIZE`.
+   - **RBAC** (see [User-level RBAC](#user-level-rbac)): `RBAC_ENABLED`, `RBAC_USE_LUMAPPS_NATIVE`, `RBAC_ORG_ADMIN_CLAIM`, and (fallback) `RBAC_ROLE_CLAIM`, `RBAC_*_PATTERNS`, `RBAC_DENY_API_KEY_FOR_NON_READ`, `RBAC_CONTENT_SITE_CACHE_*`.
    - `CORS_ORIGINS`: extra CORS origins (comma-separated).
    - `LOG_LEVEL`, `MAX_SEARCH_RESULTS`, etc.
 
@@ -88,11 +88,11 @@ LumApps OAuth applications are created with a fixed scope: **all.read** (read-on
 
 | Purpose                   | Env vars                                                                                                   | LumApps scope | Tools                                                                                                             |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Read (end users)**      | `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`) | **all.read**  | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`, `inspect_lumapps_element` |
-| **Admin (modifications)** | `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`                                                  | **all.admin** | `update_global_css`, `update_widget_style`, `update_site_global_settings`                                         |
+| **Read (end users)**      | `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`) | **all.read**  | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`                             |
+| **Admin (content + structural)** | `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`                                            | **all.admin** | `inspect_lumapps_element`, `update_widget_style`, `update_global_css`, `update_site_global_settings`                 |
 
 - **Recommended setup**: Create **two OAuth applications** in LumApps for the same organization: one with **all.read** (for end-user search and inspection), one with **all.admin** (for CSS and widget updates). Set the read app in `LUMAPPS_READ_CLIENT_ID`/`LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`) and the admin app in `LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`. The server will use the read app for read tools and the admin app for modification tools; tokens are cached per user and per profile.
-- **Read-only deployment**: If you only set the read credentials, **modification tools will not work**. Calling `update_global_css`, `update_widget_style` or `update_site_global_settings` will return a clear error asking you to configure the admin credentials.
+- **Read-only deployment**: If you only set the read credentials, **inspect and modification tools will not work**. `inspect_lumapps_element`, `update_global_css`, `update_widget_style` and `update_site_global_settings` require the admin app; calling them without admin credentials will return a clear error.
 - **Single token (tests)**: If you set `LUMAPPS_ACCESS_TOKEN`, that token is used for both read and admin; no separate admin credentials are needed. The token must have the scope required by the tools you use (admin scope if you call modification tools).
 
 ---
@@ -160,19 +160,20 @@ Credentials stay inside your perimeter; use your existing secret management (e.g
 
 ## Exposed MCP tools
 
-| Tool                          | Description                                                                  | Credentials       |
-| ----------------------------- | ---------------------------------------------------------------------------- | ----------------- |
-| `search_content`              | Search LumApps content (titles, excerpts, `content_id`)                      | read (all.read)   |
-| `get_content_body`            | Get full article body by `content_id`                                        | read              |
-| `find_person`                 | Search people in the directory                                               | read              |
-| `get_useful_links`            | Search useful links (Directory Entries: train, IT, training, etc.)           | read              |
-| `search_site`                 | List or search LumApps sites (instances) for discovery and user confirmation | read              |
-| `inspect_lumapps_element`     | Inspect page layout or site global CSS (API only)                            | read              |
-| `update_global_css`           | Update site global CSS                                                       | admin (all.admin) |
-| `update_widget_style`         | Update a widget's style on a page                                            | admin             |
-| `update_site_global_settings` | Update site footer HTML and/or head scripts                                  | admin             |
+| Tool                          | Description                                                                  | Level      | LumApps credentials   |
+| ----------------------------- | ---------------------------------------------------------------------------- | ---------- | --------------------- |
+| `search_content`              | Search LumApps content (titles, excerpts, `content_id`)                      | Read       | read (all.read)        |
+| `get_content_body`            | Get full article body by `content_id`                                        | Read       | read                   |
+| `find_person`                 | Search people in the directory                                               | Read       | read                   |
+| `get_useful_links`            | Search useful links (Directory Entries: train, IT, training, etc.)           | Read       | read                   |
+| `search_site`                 | List or search LumApps sites (instances) for discovery and user confirmation | Read       | read                   |
+| `inspect_lumapps_element`     | Inspect page layout or site global CSS (API only); prepares edits           | **Content** | admin (canEdit/site admin)      |
+| `update_global_css`           | Update site global CSS                                                       | Structural | admin (all.admin)     |
+| `update_widget_style`         | Update a widget's style on a page                                            | Content    | admin + canEdit       |
+| `update_site_global_settings` | Update site footer HTML and/or head scripts                                  | Structural | admin                 |
 
-Read tools use the **read** LumApps app (`LUMAPPS_READ_CLIENT_ID`/`LUMAPPS_READ_CLIENT_SECRET` or `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`); modification tools use the **admin** app (`LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`) when configured. See [Read vs admin credentials](#read-vs-admin-credentials). When [user-level RBAC](#user-level-rbac) is enabled, **Structural** tools (CSS, layout, global settings) also require the authenticated user to have Site Administrator role for the target site; **Content** tools (when added) require Contributor or Admin. API key alone cannot run Structural or Content tools.
+- **Level**: RBAC sensitivity. **Read** = any authenticated user. **Content** = Contributor or Admin on the page/site (inspect + widget style). **Structural** = Site Administrator only (global CSS, global settings).
+- **LumApps credentials**: **Read**-level tools use the **read** app. **Content** (`inspect_lumapps_element`, `update_widget_style`) and **Structural** tools use the **admin** app (`LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`) when configured. See [Read vs admin credentials](#read-vs-admin-credentials). When [user-level RBAC](#user-level-rbac) is enabled, API key alone cannot run Content or Structural tools.
 
 ### Conduct rules for modification tools
 
@@ -213,13 +214,31 @@ Content is stored in `app/resources/` and can be updated without code changes.
 
 ### User-level RBAC
 
-The server enforces **user-level** role checks so that LumApps governance is respected when using AI agents:
+The server enforces **user-level** role checks so that LumApps governance is respected when using AI agents. When **`RBAC_USE_LUMAPPS_NATIVE=true`** (default), permissions are based on **LumApps native APIs** and **OIDC**, avoiding reliance on a single "all.admin" token:
 
-- **Read tools**: available to any authenticated user (API key or OIDC).
-- **Content tools** (draft/edit pages or articles, when added): require **Contributor** or **Admin** role for the target site; OIDC identity required (API key alone is denied when `RBAC_DENY_API_KEY_FOR_NON_READ=true`).
-- **Structural tools** (`update_global_css`, `update_site_global_settings`, `update_widget_style`): require **Site Administrator** role for the target site. A **Global Admin** (e.g. one JWT claim such as `lumapps:site:*:admin` or `lumapps:global:admin`) is allowed on all sites without listing each site in the token.
+- **Global Admin (Platform)**: **LumApps user token** payload (the token obtained via impersonation) must contain **`isOrgAdmin: true`** (configurable via `RBAC_ORG_ADMIN_CLAIM`). That token is generated from OAuth2 client credentials + user email; the claim comes from LumApps, not from the OIDC JWT.
+- **Site Admin (Structural tools)**: LumApps **`GET service/front-init?fields=user`** returns `user.instancesSuperAdmin` (site IDs where the user is admin) and `user.isSuperAdmin`. The user must be in that list (or `isSuperAdmin`) for `update_global_css` and `update_site_global_settings`.
+- **Content Editor (Content tools)**: LumApps **`GET content/get?uid=...&fields=canEdit`** returns whether the user can edit that page. Used for `inspect_lumapps_element` and `update_widget_style` when targeting a specific content; when only a site is targeted (e.g. inspect global CSS), Site Admin is required.
 
-Role resolution uses OIDC claims (e.g. `groups`). Configure patterns in `RBAC_ADMIN_PATTERNS`, `RBAC_CONTRIBUTOR_PATTERNS`, and `RBAC_GLOBAL_ADMIN_PATTERNS`; use `{site_id}` for site-scoped values and a literal like `lumapps:site:*:admin` for global admin. If LumApps returns 401/403 on a write, the server returns a secure, governance-friendly message instead of raw API details. A short-lived cache (configurable TTL and size) resolves `content_id` → `site_id` for widget updates to avoid repeated LumApps API calls.
+**Read tools** remain available to any authenticated user (API key or OIDC). If LumApps returns 401/403 on a write, the server returns a secure, governance-friendly message. In native mode, if the LumApps user token cannot be obtained for RBAC checks, access is denied (fail-closed). A short-lived cache resolves `content_id` → `site_id` for widget updates.
+
+When **`RBAC_USE_LUMAPPS_NATIVE=false`**, the server falls back to **OIDC role patterns** (`RBAC_ADMIN_PATTERNS`, `RBAC_CONTRIBUTOR_PATTERNS`, `RBAC_GLOBAL_ADMIN_PATTERNS`) with `{site_id}` substitution.
+
+#### Configuring OIDC for RBAC fallback
+
+When using the fallback (no LumApps API for roles), the server reads a **role claim** from the JWT (default: `groups`) and matches its values against the configured patterns. Configure your IdP (Azure AD, Okta, Ping, etc.) so that the token contains the right values:
+
+| Goal | Claim (default `groups`) must contain | Example value |
+|------|----------------------------------------|---------------|
+| **Global Admin** (all tools) | One of `RBAC_GLOBAL_ADMIN_PATTERNS` | `lumapps:site:*:admin` or `lumapps:global:admin` |
+| **Site Admin** (structural tools for a site) | Pattern with concrete `site_id` from `RBAC_ADMIN_PATTERNS` | `lumapps:site:abc123:admin` |
+| **Contributor / Content** (content tools for a site) | Pattern from `RBAC_CONTRIBUTOR_PATTERNS` | `lumapps:site:abc123:contributor` or `lumapps:site:abc123:admin` |
+
+- **Claim name**: Set `RBAC_ROLE_CLAIM` to the claim that holds the list (e.g. `groups`, `roles`, or a custom claim like `lumapps_roles`).
+- **Pattern format**: Patterns use `{site_id}` as placeholder. The server replaces it with the target site ID and checks for an **exact match** in the claim values. For Global Admin, use literal values without placeholder (e.g. `lumapps:site:*:admin`).
+- **IdP setup**: In Azure AD, map LumApps site/role data to group membership or to a custom claim (e.g. via claims mapping policy or SAML/SCIM). In Okta, use groups or a custom claim. Ensure the token actually contains strings like `lumapps:site:<siteId>:admin` for each site where the user is admin.
+
+Example: for a user who is Site Admin on site `prod-portal` and Contributor on site `marketing`, the JWT claim (e.g. `groups`) should include at least `lumapps:site:prod-portal:admin` and `lumapps:site:marketing:contributor` (or `lumapps:site:marketing:admin`).
 
 ### SSO / OIDC (enterprise)
 
