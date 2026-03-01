@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-03-01
+
 ### Added
 
 - **RBAC LumApps native permissions**: when `RBAC_USE_LUMAPPS_NATIVE=true` (default), permissions use LumApps APIs and the LumApps user token payload. **Global Admin**: claim `isOrgAdmin: true` in the **LumApps user token** (obtained via impersonation), not in the OIDC JWT (`RBAC_ORG_ADMIN_CLAIM`). **Site Admin (Structural)**: `GET service/front-init?fields=user` → `user.instancesSuperAdmin`, `user.isSuperAdmin`. **Content (canEdit)**: `GET content/get?uid=...&fields=canEdit`. Fallback to OIDC role patterns when `RBAC_USE_LUMAPPS_NATIVE=false`.
@@ -54,4 +56,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP endpoints protected by `MCP_API_KEY`.
 - Sensitive variables via `.env` (not versioned).
 
+[Unreleased]: https://github.com/Wheatfield-STUDIO/mcp-server-lumapps/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Wheatfield-STUDIO/mcp-server-lumapps/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Wheatfield-STUDIO/mcp-server-lumapps/releases/tag/v1.0.0
