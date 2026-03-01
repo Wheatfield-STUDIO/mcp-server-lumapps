@@ -45,7 +45,15 @@ app.include_router(messages.router)
 
 @app.get("/health")
 async def health_check():
+    """Liveness probe: process is running."""
     return {"status": "ok"}
+
+
+@app.get("/ready")
+async def readiness_check():
+    """Readiness probe: app is configured and ready to accept traffic."""
+    return {"status": "ready"}
+
 
 @app.get("/")
 @app.post("/")

@@ -1,0 +1,16 @@
+# LumApps MCP Server — ClusterIP Service (internal networking)
+apiVersion: v1
+kind: Service
+metadata:
+  name: lumapps-mcp-server
+  labels:
+    app: lumapps-mcp-server
+spec:
+  type: ClusterIP
+  selector:
+    app: lumapps-mcp-server
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP

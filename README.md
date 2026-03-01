@@ -66,13 +66,15 @@ cp .env.example .env
 2. **Required variables**:
    - `MCP_API_KEY`: key shared with MCP clients (Cursor, Copilot Studio, etc.).
    - `LUMAPPS_ORG_ID`: LumApps organization ID.
-   - Either `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`, or `LUMAPPS_ACCESS_TOKEN` (for testing).
+   - Either `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`), or `LUMAPPS_ACCESS_TOKEN` (for testing).
 
 3. **Optional variables**:
    - `MCP_PUBLIC_URL`: public server URL (e.g. devtunnel/ngrok) so clients get the correct URL in MCP events.
    - `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`: second LumApps OAuth app with **all.admin** scope (see [Read vs admin credentials](#read-vs-admin-credentials) below).
    - `CORS_ORIGINS`: extra CORS origins (comma-separated).
    - `LOG_LEVEL`, `MAX_SEARCH_RESULTS`, etc.
+
+   **Env naming (Kubernetes/enterprise)**: For read credentials, `LUMAPPS_READ_CLIENT_ID` and `LUMAPPS_READ_CLIENT_SECRET` are preferred; when set, they take precedence over `LUMAPPS_CLIENT_ID` / `LUMAPPS_CLIENT_SECRET`. Both naming schemes are supported for backward compatibility.
 
 **Important**: never commit the `.env` file (it is listed in `.gitignore`).
 
@@ -82,10 +84,10 @@ LumApps OAuth applications are created with a fixed scope: **all.read** (read-on
 
 | Purpose | Env vars | LumApps scope | Tools |
 |--------|----------|----------------|--------|
-| **Read (end users)** | `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET` | **all.read** | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`, `inspect_lumapps_element` |
+| **Read (end users)** | `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`) | **all.read** | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`, `inspect_lumapps_element` |
 | **Admin (modifications)** | `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET` | **all.admin** | `update_global_css`, `update_widget_style`, `update_site_global_settings` |
 
-- **Recommended setup**: Create **two OAuth applications** in LumApps for the same organization: one with **all.read** (for end-user search and inspection), one with **all.admin** (for CSS and widget updates). Set the read app in `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET` and the admin app in `LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`. The server will use the read app for read tools and the admin app for modification tools; tokens are cached per user and per profile.
+- **Recommended setup**: Create **two OAuth applications** in LumApps for the same organization: one with **all.read** (for end-user search and inspection), one with **all.admin** (for CSS and widget updates). Set the read app in `LUMAPPS_READ_CLIENT_ID`/`LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`) and the admin app in `LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`. The server will use the read app for read tools and the admin app for modification tools; tokens are cached per user and per profile.
 - **Read-only deployment**: If you only set the read credentials, **modification tools will not work**. Calling `update_global_css`, `update_widget_style` or `update_site_global_settings` will return a clear error asking you to configure the admin credentials.
 - **Single token (tests)**: If you set `LUMAPPS_ACCESS_TOKEN`, that token is used for both read and admin; no separate admin credentials are needed. The token must have the scope required by the tools you use (admin scope if you call modification tools).
 
@@ -109,12 +111,46 @@ uvicorn app.main:app --reload --port 8000
 docker compose up --build
 ```
 
+To build the production image only (multi-stage, non-root):
+
+```bash
+docker build -t lumapps-mcp-server:latest .
+docker run --rm -p 8000:8000 --env-file .env lumapps-mcp-server:latest
+```
+
 **Connecting clients:**
 
 - **Cursor** (local): use URL `http://localhost:8000/mcp` and the key set in `MCP_API_KEY`.
 - **Copilot Studio** cannot use localhost; it needs a **public URL**. Options:
   - **Tunnel** (dev or demo): expose the server with [devtunnel](https://github.com/microsoft/devtunnel) or [ngrok](https://ngrok.com), then set `MCP_PUBLIC_URL` in `.env` and use the tunnel URL (e.g. `https://xxxx.devtunnels.ms/mcp`) in Copilot Studio. See [Testing with devtunnel and MCP Inspector](docs/DEVTUNNEL_INSPECTOR.md).
   - **Production**: host the server on a real environment (e.g. Azure, AWS) and use that public base URL + `/mcp` in Copilot Studio.
+
+### Kubernetes (enterprise / on-premise)
+
+The server is containerized for orchestrated deployments. Use the manifests in `k8s/` to deploy inside your cluster.
+
+1. **Build and push the image** (replace registry/namespace as needed):
+
+   ```bash
+   docker build -t your-registry/lumapps-mcp-server:latest .
+   docker push your-registry/lumapps-mcp-server:latest
+   ```
+
+2. **Configure**:
+   - Edit `k8s/configmap.yaml` with your `LUMAPPS_ORG_ID`, `LUMAPPS_HAUSSMANN_CELL`, and other non-secret settings.
+   - Create the Secret with real credentials (do not commit them). Options:
+     - **Inline**: replace placeholders in `k8s/secrets.yaml` with real values (use `stringData` for plain text), then `kubectl apply -f k8s/secrets.yaml`.
+     - **Recommended**: create the secret from literals or a secret manager so credentials never touch the repo:  
+       `kubectl create secret generic lumapps-mcp-secrets --from-literal=MCP_API_KEY=... --from-literal=LUMAPPS_READ_CLIENT_ID=... --from-literal=LUMAPPS_READ_CLIENT_SECRET=...`  
+       Add `LUMAPPS_ADMIN_CLIENT_ID` / `LUMAPPS_ADMIN_CLIENT_SECRET` if you use modification tools.
+
+3. **Deploy**:
+   - Update `k8s/deployment.yaml` image to your registry URL if not using `lumapps-mcp-server:latest` locally.
+   - Apply in order: `kubectl apply -f k8s/configmap.yaml`, `kubectl apply -f k8s/secrets.yaml`, `kubectl apply -f k8s/deployment.yaml`, `kubectl apply -f k8s/service.yaml`.
+
+4. **Probes**: The deployment uses `/health` for liveness and `/ready` for readiness. Expose the service via Ingress or LoadBalancer as required by your environment.
+
+Credentials stay inside your perimeter; use your existing secret management (e.g. External Secrets, Vault) where possible.
 
 ---
 
@@ -132,7 +168,7 @@ docker compose up --build
 | `update_widget_style`         | Update a widget's style on a page                       | admin             |
 | `update_site_global_settings` | Update site footer HTML and/or head scripts             | admin             |
 
-Read tools use the **read** LumApps app (`LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`); modification tools use the **admin** app (`LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`) when configured. See [Read vs admin credentials](#read-vs-admin-credentials).
+Read tools use the **read** LumApps app (`LUMAPPS_READ_CLIENT_ID`/`LUMAPPS_READ_CLIENT_SECRET` or `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`); modification tools use the **admin** app (`LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`) when configured. See [Read vs admin credentials](#read-vs-admin-credentials).
 
 ### Conduct rules for modification tools
 

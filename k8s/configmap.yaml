@@ -1,0 +1,20 @@
+# LumApps MCP Server — non-secret configuration
+# Edit values for your environment, then: kubectl apply -f k8s/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lumapps-mcp-config
+  labels:
+    app: lumapps-mcp-server
+data:
+  LUMAPPS_ORG_ID: "your-organization-id"
+  LUMAPPS_HAUSSMANN_CELL: "https://sites.lumapps.com"
+  SITE_BASE_URL: "https://sites.lumapps.com"
+  LOG_LEVEL: "INFO"
+  MAX_SEARCH_RESULTS: "5"
+  # Optional: public URL for MCP clients (e.g. ingress); leave empty if not needed
+  # MCP_PUBLIC_URL: ""
+  # Optional: extra CORS origins, comma-separated
+  # CORS_ORIGINS: ""
+  # Optional: user directory module id for find_person enrichment
+  # LUMAPPS_USER_DIRECTORY_ID: ""

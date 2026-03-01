@@ -24,6 +24,9 @@ class Settings(BaseSettings):
 
     LUMAPPS_CLIENT_ID: Optional[str] = None
     LUMAPPS_CLIENT_SECRET: Optional[str] = None
+    # Aliases for read app (preferred in K8s/enterprise); take precedence over LUMAPPS_CLIENT_ID/SECRET when set
+    LUMAPPS_READ_CLIENT_ID: Optional[str] = None
+    LUMAPPS_READ_CLIENT_SECRET: Optional[str] = None
     # Admin app (all.admin): required for modification tools unless using LUMAPPS_ACCESS_TOKEN
     LUMAPPS_ADMIN_CLIENT_ID: Optional[str] = None
     LUMAPPS_ADMIN_CLIENT_SECRET: Optional[str] = None
@@ -41,11 +44,22 @@ class Settings(BaseSettings):
     def check_lumapps_auth(self):
         if self.LUMAPPS_ACCESS_TOKEN:
             return self
-        if not self.LUMAPPS_CLIENT_ID or not self.LUMAPPS_CLIENT_SECRET:
+        read_id = self.LUMAPPS_READ_CLIENT_ID or self.LUMAPPS_CLIENT_ID
+        read_secret = self.LUMAPPS_READ_CLIENT_SECRET or self.LUMAPPS_CLIENT_SECRET
+        if not read_id or not read_secret:
             raise ValueError(
-                "Either LUMAPPS_ACCESS_TOKEN or both LUMAPPS_CLIENT_ID and LUMAPPS_CLIENT_SECRET must be set"
+                "Either LUMAPPS_ACCESS_TOKEN or both read credentials "
+                "(LUMAPPS_READ_CLIENT_ID/SECRET or LUMAPPS_CLIENT_ID/LUMAPPS_CLIENT_SECRET) must be set"
             )
         return self
+
+    def get_read_client_id(self) -> Optional[str]:
+        """Effective read app client ID (LUMAPPS_READ_CLIENT_ID preferred, else LUMAPPS_CLIENT_ID)."""
+        return self.LUMAPPS_READ_CLIENT_ID or self.LUMAPPS_CLIENT_ID
+
+    def get_read_client_secret(self) -> Optional[str]:
+        """Effective read app client secret (LUMAPPS_READ_CLIENT_SECRET preferred, else LUMAPPS_CLIENT_SECRET)."""
+        return self.LUMAPPS_READ_CLIENT_SECRET or self.LUMAPPS_CLIENT_SECRET
 
     def has_admin_credentials(self) -> bool:
         """True if admin OAuth app is configured (for modification tools). When using LUMAPPS_ACCESS_TOKEN, that token is used for both read and admin."""
