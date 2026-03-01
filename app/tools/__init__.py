@@ -21,6 +21,7 @@ from typing import Any, Dict, Callable, Awaitable
 
 from app.jsonrpc.dispatcher import dispatcher
 from app.core.user_context import get_user_context
+from app.core.rbac import authorize_tool_call, get_tool_sensitivity, RBACError
 import logging
 
 from app.tools import (
@@ -89,6 +90,19 @@ def _resolve_user_email(arguments: Dict[str, Any]) -> Dict[str, Any]:
     return arguments
 
 
+async def _get_read_token_for_rbac(arguments: Dict[str, Any]) -> Any:
+    """Optional read token for content_id -> site_id resolution in RBAC (structural and content tools)."""
+    from app.services.lumapps_auth import lumapps_auth
+    user_email = (arguments.get("user_email") or "").strip()
+    if not user_email:
+        return None
+    try:
+        return await lumapps_auth.get_token(user_email=user_email, profile="read")
+    except Exception as e:
+        logger.debug("RBAC: could not get read token for site resolution: %s", e)
+        return None
+
+
 @dispatcher.register("tools/call")
 async def tools_call(params: Any) -> Dict[str, Any]:
     """Dispatch by tool name to the registered handler."""
@@ -100,6 +114,14 @@ async def tools_call(params: Any) -> Dict[str, Any]:
         available = sorted({s["name"] for s, _ in TOOLS.values()})
         raise ValueError(f"Unknown tool: {name}. Available: {', '.join(available)}")
     arguments = _resolve_user_email(arguments)
+    token = None
+    sensitivity = get_tool_sensitivity(name)
+    if sensitivity in ("structural", "content") and arguments.get("user_email"):
+        token = await _get_read_token_for_rbac(arguments)
+    try:
+        await authorize_tool_call(name, arguments, token=token)
+    except RBACError as e:
+        raise ValueError(e.message)
     _schema, handler = TOOLS[name]
     return await handler(arguments)
 

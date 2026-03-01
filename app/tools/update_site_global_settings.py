@@ -18,7 +18,7 @@ from typing import Any, Dict
 import logging
 
 from app.core.config import settings
-from app.tools.api_error_utils import format_api_error
+from app.tools.api_error_utils import format_api_error, is_permission_denied, PERMISSION_DENIED_MESSAGE
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
 
@@ -173,13 +173,9 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
             await lumapps_client.save_style(style, token=token)
         except Exception as e:
             logger.exception("update_site_global_settings save_style failed")
+            text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Could not save style: {format_api_error(e)}."
             return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"Could not save style: {format_api_error(e)}.",
-                    }
-                ]
+                "content": [{"type": "text", "text": text}]
             }
         messages.append(f"Footer updated for locales: {', '.join(sorted(merged_footer.keys()))}.")
 
@@ -214,13 +210,9 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
             await lumapps_client.save_instance(instance, token=token)
         except Exception as e:
             logger.exception("update_site_global_settings save_instance failed")
+            text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Could not save instance (head): {format_api_error(e)}."
             return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"Could not save instance (head): {format_api_error(e)}.",
-                    }
-                ]
+                "content": [{"type": "text", "text": text}]
             }
         messages.append("Head updated (script(s) added).")
 

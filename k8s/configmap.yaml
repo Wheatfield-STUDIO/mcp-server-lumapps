@@ -28,3 +28,11 @@ data:
   # CORS_ORIGINS: ""
   # Optional: user directory module id for find_person enrichment
   # LUMAPPS_USER_DIRECTORY_ID: ""
+  # Optional: RBAC (user-level roles). See README User-level RBAC.
+  # RBAC_ENABLED: "true"
+  # RBAC_ROLE_CLAIM: "groups"
+  # RBAC_ADMIN_PATTERNS: "lumapps:site:{site_id}:admin"
+  # RBAC_GLOBAL_ADMIN_PATTERNS: "lumapps:site:*:admin,lumapps:global:admin"
+  # RBAC_DENY_API_KEY_FOR_NON_READ: "true"
+  # RBAC_CONTENT_SITE_CACHE_TTL_SECONDS: "300"
+  # RBAC_CONTENT_SITE_CACHE_MAX_SIZE: "500"
