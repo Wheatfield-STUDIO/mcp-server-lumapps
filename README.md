@@ -86,10 +86,10 @@ cp .env.example .env
 
 LumApps OAuth applications are created with a fixed scope: **all.read** (read-only) or **all.admin** (read + write). This server separates **end-user tools** (read) from **admin tools** (modifications) by using two credential pairs when both are configured:
 
-| Purpose | Env vars | LumApps scope | Tools |
-|--------|----------|----------------|--------|
-| **Read (end users)** | `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`) | **all.read** | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`, `inspect_lumapps_element` |
-| **Admin (modifications)** | `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET` | **all.admin** | `update_global_css`, `update_widget_style`, `update_site_global_settings` |
+| Purpose                   | Env vars                                                                                                   | LumApps scope | Tools                                                                                                             |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **Read (end users)**      | `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`) | **all.read**  | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`, `inspect_lumapps_element` |
+| **Admin (modifications)** | `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`                                                  | **all.admin** | `update_global_css`, `update_widget_style`, `update_site_global_settings`                                         |
 
 - **Recommended setup**: Create **two OAuth applications** in LumApps for the same organization: one with **all.read** (for end-user search and inspection), one with **all.admin** (for CSS and widget updates). Set the read app in `LUMAPPS_READ_CLIENT_ID`/`LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`) and the admin app in `LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`. The server will use the read app for read tools and the admin app for modification tools; tokens are cached per user and per profile.
 - **Read-only deployment**: If you only set the read credentials, **modification tools will not work**. Calling `update_global_css`, `update_widget_style` or `update_site_global_settings` will return a clear error asking you to configure the admin credentials.
@@ -160,17 +160,17 @@ Credentials stay inside your perimeter; use your existing secret management (e.g
 
 ## Exposed MCP tools
 
-| Tool                      | Description                                             | Credentials   |
-| ------------------------- | ------------------------------------------------------- | ------------- |
-| `search_content`          | Search LumApps content (titles, excerpts, `content_id`) | read (all.read) |
-| `get_content_body`        | Get full article body by `content_id`                   | read          |
-| `find_person`             | Search people in the directory                          | read          |
-| `get_useful_links`        | Search useful links (Directory Entries: train, IT, training, etc.) | read          |
-| `search_site`             | List or search LumApps sites (instances) for discovery and user confirmation | read          |
-| `inspect_lumapps_element` | Inspect page layout or site global CSS (API only)       | read          |
-| `update_global_css`           | Update site global CSS                                  | admin (all.admin) |
-| `update_widget_style`         | Update a widget's style on a page                       | admin             |
-| `update_site_global_settings` | Update site footer HTML and/or head scripts             | admin             |
+| Tool                          | Description                                                                  | Credentials       |
+| ----------------------------- | ---------------------------------------------------------------------------- | ----------------- |
+| `search_content`              | Search LumApps content (titles, excerpts, `content_id`)                      | read (all.read)   |
+| `get_content_body`            | Get full article body by `content_id`                                        | read              |
+| `find_person`                 | Search people in the directory                                               | read              |
+| `get_useful_links`            | Search useful links (Directory Entries: train, IT, training, etc.)           | read              |
+| `search_site`                 | List or search LumApps sites (instances) for discovery and user confirmation | read              |
+| `inspect_lumapps_element`     | Inspect page layout or site global CSS (API only)                            | read              |
+| `update_global_css`           | Update site global CSS                                                       | admin (all.admin) |
+| `update_widget_style`         | Update a widget's style on a page                                            | admin             |
+| `update_site_global_settings` | Update site footer HTML and/or head scripts                                  | admin             |
 
 Read tools use the **read** LumApps app (`LUMAPPS_READ_CLIENT_ID`/`LUMAPPS_READ_CLIENT_SECRET` or `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`); modification tools use the **admin** app (`LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`) when configured. See [Read vs admin credentials](#read-vs-admin-credentials). When [user-level RBAC](#user-level-rbac) is enabled, **Structural** tools (CSS, layout, global settings) also require the authenticated user to have Site Administrator role for the target site; **Content** tools (when added) require Contributor or Admin. API key alone cannot run Structural or Content tools.
 
@@ -195,8 +195,8 @@ Static or semi-static documentation exposed as MCP resources (clients can list a
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `lumapps://lumapps-mcp-server/css-variables`             | LumApps CSS variables reference (static doc).                                                                 |
 | `lumapps://lumapps-mcp-server/layout-and-widget-styling` | Layout (rows, cells, sticky), row/cell and widget styles (spacing, border, background, header/footer, hover). |
-| `lumapps://lumapps-mcp-server/style-and-theme`          | Site style (theme): structure, properties, stylesheets, footer/head, style/save flow.                         |
-| `lumapps://lumapps-mcp-server/customizations-api`      | Customizations API: JavaScript (targets, placements, components) and CSS (anchors, best practices).         |
+| `lumapps://lumapps-mcp-server/style-and-theme`           | Site style (theme): structure, properties, stylesheets, footer/head, style/save flow.                         |
+| `lumapps://lumapps-mcp-server/customizations-api`        | Customizations API: JavaScript (targets, placements, components) and CSS (anchors, best practices).           |
 
 Content is stored in `app/resources/` and can be updated without code changes.
 
@@ -243,14 +243,14 @@ Videos are in **`assets/videos/`** (tracked with Git LFS). Main recap:
   Your browser does not support the video tag.
 </video>
 
-| Feature | Video |
-| -------- | ----- |
-| **Search** | [01-deep-content-search.mp4](assets/videos/01-deep-content-search.mp4) |
-| **People** | [02-people-expertise-discovery.mp4](assets/videos/02-people-expertise-discovery.mp4) |
-| **Links** | [03-smart-intent-links.mp4](assets/videos/03-smart-intent-links.mp4) |
-| **Drafting** | [04-ai-content-drafting.mp4](assets/videos/04-ai-content-drafting.mp4) |
-| **Design** | [05-visual-layout-engineering.mp4](assets/videos/05-visual-layout-engineering.mp4) |
-| **Architect** | [06-global-site-architecture.mp4](assets/videos/06-global-site-architecture.mp4) |
+| Feature       | Video                                                                                |
+| ------------- | ------------------------------------------------------------------------------------ |
+| **Search**    | [01-deep-content-search.mp4](assets/videos/01-deep-content-search.mp4)               |
+| **People**    | [02-people-expertise-discovery.mp4](assets/videos/02-people-expertise-discovery.mp4) |
+| **Links**     | [03-smart-intent-links.mp4](assets/videos/03-smart-intent-links.mp4)                 |
+| **Drafting**  | [04-ai-content-drafting.mp4](assets/videos/04-ai-content-drafting.mp4)               |
+| **Design**    | [05-visual-layout-engineering.mp4](assets/videos/05-visual-layout-engineering.mp4)   |
+| **Architect** | [06-global-site-architecture.mp4](assets/videos/06-global-site-architecture.mp4)     |
 
 ---
 
@@ -285,4 +285,4 @@ Contributions are welcome (issues, pull requests). Please read [CONTRIBUTING.md]
 
 ---
 
-*Disclaimer: This is a community-driven project and is not officially affiliated with or endorsed by LumApps.*
+_Disclaimer: This is a community-driven project and is not officially affiliated with or endorsed by LumApps._
