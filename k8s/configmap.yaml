@@ -12,6 +12,16 @@ data:
   SITE_BASE_URL: "https://sites.lumapps.com"
   LOG_LEVEL: "INFO"
   MAX_SEARCH_RESULTS: "5"
+  # Auth: oidc_preferred (default) or api_key_only
+  AUTH_MODE: "oidc_preferred"
+  AUTH_ALLOW_API_KEY_FALLBACK: "true"
+  # OIDC (non-secret): issuer, audience, client id, claim names
+  # OIDC_ISSUER_URL: "https://login.microsoftonline.com/<tenant>/v2.0"
+  # OIDC_AUDIENCE: "your-api-audience"
+  # OIDC_CLIENT_ID: "your-client-id"
+  # OIDC_EMAIL_CLAIM: "email"
+  # OIDC_USERNAME_CLAIM: "preferred_username"
+  # OIDC_CLOCK_SKEW_SECONDS: "60"
   # Optional: public URL for MCP clients (e.g. ingress); leave empty if not needed
   # MCP_PUBLIC_URL: ""
   # Optional: extra CORS origins, comma-separated

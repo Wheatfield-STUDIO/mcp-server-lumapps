@@ -20,6 +20,7 @@ Registry built from TOOL_NAME, TOOL_SCHEMA, handle() in each module.
 from typing import Any, Dict, Callable, Awaitable
 
 from app.jsonrpc.dispatcher import dispatcher
+from app.core.user_context import get_user_context
 import logging
 
 from app.tools import (
@@ -66,6 +67,28 @@ def _build_registry() -> None:
 _build_registry()
 
 
+def _resolve_user_email(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Inject verified user_email from OIDC context when present; reject mismatched
+    client-supplied user_email. When no context (API key mode), keep arguments as-is.
+    """
+    ctx = get_user_context()
+    if ctx is not None:
+        resolved = ctx.resolved_email()
+        if not resolved:
+            raise ValueError("OIDC token has no email or identifier for LumApps user context")
+        supplied = arguments.get("user_email")
+        if supplied and supplied.strip().lower() != resolved.strip().lower():
+            raise ValueError(
+                "user_email in request does not match authenticated identity; "
+                "use the identity from your session"
+            )
+        args = dict(arguments)
+        args["user_email"] = resolved
+        return args
+    return arguments
+
+
 @dispatcher.register("tools/call")
 async def tools_call(params: Any) -> Dict[str, Any]:
     """Dispatch by tool name to the registered handler."""
@@ -76,6 +99,7 @@ async def tools_call(params: Any) -> Dict[str, Any]:
     if name not in TOOLS:
         available = sorted({s["name"] for s, _ in TOOLS.values()})
         raise ValueError(f"Unknown tool: {name}. Available: {', '.join(available)}")
+    arguments = _resolve_user_email(arguments)
     _schema, handler = TOOLS[name]
     return await handler(arguments)
 
