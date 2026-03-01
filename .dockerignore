@@ -1,9 +1,13 @@
 .git
 .env
+.env.*
+!.env.example
 __pycache__
 *.pyc
+*.pyo
 .venv
 venv
+env
 *.md
 .pytest_cache
 .coverage
@@ -11,3 +15,14 @@ htmlcov
 .idea
 .vscode
 *.log
+# Media and docs (not needed at runtime)
+assets
+documentations
+docs
+*.mp4
+*.webm
+*.mov
+# Editor and tooling
+.cursor
+.plans
+*.plan.md

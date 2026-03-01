@@ -38,7 +38,7 @@ class LumAppsAuthManager:
     async def get_token(self, user_email: str, profile: Profile = "read") -> str:
         """
         Return a bearer token for the given user and profile.
-        - profile "read": uses LUMAPPS_CLIENT_ID/SECRET (all.read) or LUMAPPS_ACCESS_TOKEN.
+        - profile "read": uses LUMAPPS_READ_CLIENT_ID/SECRET or LUMAPPS_CLIENT_ID/SECRET (all.read), or LUMAPPS_ACCESS_TOKEN.
         - profile "admin": uses LUMAPPS_ADMIN_CLIENT_ID/SECRET (all.admin) or LUMAPPS_ACCESS_TOKEN.
         """
         if settings.LUMAPPS_ACCESS_TOKEN:
@@ -60,8 +60,8 @@ class LumAppsAuthManager:
 
     async def _refresh_token(self, user_email: str, profile: Profile) -> str:
         if profile == "read":
-            client_id = settings.LUMAPPS_CLIENT_ID
-            client_secret = settings.LUMAPPS_CLIENT_SECRET
+            client_id = settings.get_read_client_id()
+            client_secret = settings.get_read_client_secret()
         else:
             client_id = settings.LUMAPPS_ADMIN_CLIENT_ID
             client_secret = settings.LUMAPPS_ADMIN_CLIENT_SECRET
