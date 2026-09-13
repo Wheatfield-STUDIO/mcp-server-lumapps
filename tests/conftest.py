@@ -21,6 +21,8 @@ os.environ.setdefault("MCP_API_KEY", "test-mcp-api-key")
 os.environ.setdefault("LUMAPPS_ORG_ID", "test-org-id")
 os.environ.setdefault("LUMAPPS_READ_CLIENT_ID", "test-read-client-id")
 os.environ.setdefault("LUMAPPS_READ_CLIENT_SECRET", "test-read-client-secret")
+# Fail-closed allowlist: HTTP tools/call tests use this mailbox
+os.environ.setdefault("MCP_ALLOWED_USER_EMAILS", "dev@example.com")
 
 import pytest
 from fastapi.testclient import TestClient

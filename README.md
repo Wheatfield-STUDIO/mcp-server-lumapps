@@ -65,8 +65,9 @@ cp .env.example .env
 
 2. **Required variables**:
    - **Auth**: either `OIDC_ISSUER_URL` (for SSO) or `MCP_API_KEY` with `AUTH_ALLOW_API_KEY_FALLBACK=true` (see [SSO / OIDC](#sso--oidc-enterprise)).
+   - `MCP_ALLOWED_USER_EMAILS`: comma-separated LumApps mailboxes allowed to run **any** `tools/call` (read and write). **Fail closed**: empty or unset denies all tool calls, including API-key impersonation and OIDC. Required when `/mcp` is public.
    - `LUMAPPS_ORG_ID`: LumApps organization ID.
-   - Either `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`), or `LUMAPPS_ACCESS_TOKEN` (for testing).
+   - Either `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`), or `LUMAPPS_ACCESS_TOKEN` (tests only — not a production default).
 
 3. **Optional variables**:
    - `AUTH_MODE`: `oidc_preferred` (default) or `api_key_only`. With `api_key_only`, only `MCP_API_KEY` is accepted.
@@ -74,13 +75,28 @@ cp .env.example .env
    - `OIDC_ISSUER_URL`, `OIDC_AUDIENCE`, `OIDC_CLIENT_ID`, `OIDC_EMAIL_CLAIM`, `OIDC_USERNAME_CLAIM`, `OIDC_CLOCK_SKEW_SECONDS`: see [SSO / OIDC](#sso--oidc-enterprise) and `.env.example`.
    - `MCP_PUBLIC_URL`: public server URL (e.g. devtunnel/ngrok) so clients get the correct URL in MCP events.
    - `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`: second LumApps OAuth app with **all.admin** scope (see [Read vs admin credentials](#read-vs-admin-credentials) below).
-   - **RBAC** (see [User-level RBAC](#user-level-rbac)): `RBAC_ENABLED`, `RBAC_USE_LUMAPPS_NATIVE`, `RBAC_ORG_ADMIN_CLAIM`, and (fallback) `RBAC_ROLE_CLAIM`, `RBAC_*_PATTERNS`, `RBAC_DENY_API_KEY_FOR_NON_READ`, `RBAC_CONTENT_SITE_CACHE_*`.
+   - **RBAC** (see [User-level RBAC](#user-level-rbac)): `RBAC_ENABLED`, `RBAC_USE_LUMAPPS_NATIVE`, `RBAC_ORG_ADMIN_CLAIM`, and (fallback) `RBAC_ROLE_CLAIM`, `RBAC_*_PATTERNS`, `RBAC_DENY_API_KEY_FOR_NON_READ`, `RBAC_CONTENT_SITE_CACHE_*`. Keep `RBAC_ENABLED=true`. `RBAC_DENY_API_KEY_FOR_NON_READ` stays independently configurable (default `true`); the email allowlist still applies to reads.
    - `CORS_ORIGINS`: extra CORS origins (comma-separated).
    - `LOG_LEVEL`, `MAX_SEARCH_RESULTS`, etc.
 
    **Env naming (Kubernetes/enterprise)**: For read credentials, `LUMAPPS_READ_CLIENT_ID` and `LUMAPPS_READ_CLIENT_SECRET` are preferred; when set, they take precedence over `LUMAPPS_CLIENT_ID` / `LUMAPPS_CLIENT_SECRET`. Both naming schemes are supported for backward compatibility.
 
 **Important**: never commit the `.env` file (it is listed in `.gitignore`).
+
+### Security (public `/mcp`)
+
+A public Streamable HTTP `/mcp` plus a static API key is **not** tenant isolation by itself. The key authenticates the client; LumApps tools still impersonate whoever `user_email` names. These controls are **server-side** and apply even if a client ignores them.
+
+| Control | Behaviour |
+| --- | --- |
+| **`MCP_ALLOWED_USER_EMAILS`** | Fail closed. Every `tools/call` (read and write) must resolve to an email on this list (case-insensitive). Empty or unset → deny all API-key and impersonation tool calls. OIDC emails must also be on the list. `initialize` and `tools/list` still work with a valid API key. |
+| **API key transport** | Only `X-API-Key` or `Authorization: Bearer <MCP_API_KEY>`. Query-string `?apiKey=` and `?token=` are **rejected** (401), even if a valid header is also present. |
+| **`RBAC_DENY_API_KEY_FOR_NON_READ`** | Unchanged (default `true`; you may set `false` for a trusted Grok Bot). The email allowlist still applies to **reads**. |
+| **`RBAC_ENABLED`** | Must stay `true`. Do not disable RBAC to “make the Bot work”. |
+| **`LUMAPPS_ACCESS_TOKEN`** | Tests only. Do not use it as the production default. |
+| **IP allowlist** | **Not implemented.** Cursor / Grok Bot egress IPs are not published; a guessed CIDR list would break the Bot. Do not invent `MCP_ALLOWED_IPS`. |
+
+Do not log API keys, Bearer tokens, or allowlisted emails. Denied tool calls log the **tool name** only.
 
 ### Read vs admin credentials
 
@@ -207,7 +223,9 @@ Content is stored in `app/resources/` and can be updated without code changes.
 
 - **MCP authentication**: dual mode.
   - **OIDC preferred** (default): send `Authorization: Bearer <user-id-token>` from your IdP (Azure AD, Okta, Ping, etc.). The server validates the JWT (signature, issuer, audience, expiry) and binds every tool call to the verified user; `user_email` is taken from token claims and must not be overridden by the client.
-  - **API key fallback**: when `AUTH_ALLOW_API_KEY_FALLBACK=true`, you can still use `X-API-Key`, `Authorization: Bearer <static-key>`, or query `apiKey` / `token` with `MCP_API_KEY`. For production SSO-only, set `AUTH_ALLOW_API_KEY_FALLBACK=false`. When [user-level RBAC](#user-level-rbac) is enabled, API key alone is **read-only**: Content and Structural tools are denied and require OIDC identity.
+  - **API key fallback**: when `AUTH_ALLOW_API_KEY_FALLBACK=true`, send `X-API-Key` or `Authorization: Bearer <MCP_API_KEY>`. Query-string `?apiKey=` and `?token=` are **rejected** (keys must not appear in URLs or access logs). For production SSO-only, set `AUTH_ALLOW_API_KEY_FALLBACK=false`. When [user-level RBAC](#user-level-rbac) is enabled, API key alone is **read-only** unless `RBAC_DENY_API_KEY_FOR_NON_READ=false`.
+- **Email allowlist**: every LumApps `tools/call` (read and write) requires a resolved `user_email` listed in `MCP_ALLOWED_USER_EMAILS` (case-insensitive). Empty or unset = deny all impersonation. Applies to API-key `user_email` arguments and to OIDC token emails. `initialize` / `tools/list` still work with a valid API key so the client can connect.
+- **No IP allowlist**: `MCP_ALLOWED_IPS` is not implemented. Cursor / Grok Bot Cloud Agent egress IPs are not published; a CIDR list would break the Bot.
 - **Root endpoint**: `GET /` is unauthenticated (info only). `POST /` accepts JSON-RPC only when authenticated (same as `/mcp`).
 - **Secrets**: no hardcoded secrets; everything comes from config (`pydantic-settings` + `.env`).
 - **`.env`**: for local development only; must not be versioned. In production use environment variables or a secrets store.
@@ -220,7 +238,7 @@ The server enforces **user-level** role checks so that LumApps governance is res
 - **Site Admin (Structural tools)**: LumApps **`GET service/front-init?fields=user`** returns `user.instancesSuperAdmin` (site IDs where the user is admin) and `user.isSuperAdmin`. The user must be in that list (or `isSuperAdmin`) for `update_global_css` and `update_site_global_settings`.
 - **Content Editor (Content tools)**: LumApps **`GET content/get?uid=...&fields=canEdit`** returns whether the user can edit that page. Used for `inspect_lumapps_element` and `update_widget_style` when targeting a specific content; when only a site is targeted (e.g. inspect global CSS), Site Admin is required.
 
-**Read tools** remain available to any authenticated user (API key or OIDC). If LumApps returns 401/403 on a write, the server returns a secure, governance-friendly message. In native mode, if the LumApps user token cannot be obtained for RBAC checks, access is denied (fail-closed). A short-lived cache resolves `content_id` → `site_id` for widget updates.
+**Read tools** still require an allowlisted `user_email` (they are not open to every API-key holder). If LumApps returns 401/403 on a write, the server returns a secure, governance-friendly message. In native mode, if the LumApps user token cannot be obtained for RBAC checks, access is denied (fail-closed). A short-lived cache resolves `content_id` → `site_id` for widget updates. Do not disable `RBAC_ENABLED` on a public `/mcp`.
 
 When **`RBAC_USE_LUMAPPS_NATIVE=false`**, the server falls back to **OIDC role patterns** (`RBAC_ADMIN_PATTERNS`, `RBAC_CONTRIBUTOR_PATTERNS`, `RBAC_GLOBAL_ADMIN_PATTERNS`) with `{site_id}` substitution.
 

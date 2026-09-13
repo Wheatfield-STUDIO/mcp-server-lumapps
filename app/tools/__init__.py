@@ -22,6 +22,7 @@ from typing import Any, Dict, Callable, Awaitable
 from app.jsonrpc.dispatcher import dispatcher
 from app.core.user_context import get_user_context
 from app.core.rbac import authorize_tool_call, get_tool_sensitivity, RBACError
+from app.core.allowlist import AllowlistError, require_allowed_user_email
 import logging
 
 from app.tools import (
@@ -128,6 +129,11 @@ async def tools_call(params: Any) -> Dict[str, Any]:
         available = sorted({s["name"] for s, _ in TOOLS.values()})
         raise ValueError(f"Unknown tool: {name}. Available: {', '.join(available)}")
     arguments = _resolve_user_email(arguments)
+    try:
+        require_allowed_user_email(arguments.get("user_email"))
+    except AllowlistError as e:
+        logger.warning("allowlist denied tools/call name=%s", name)
+        raise ValueError(e.message)
     token = None
     sensitivity = get_tool_sensitivity(name)
     if sensitivity in ("structural", "content") and arguments.get("user_email"):
