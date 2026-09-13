@@ -33,6 +33,13 @@ from app.tools import (
     update_global_css,
     update_site_global_settings,
     update_widget_style,
+    update_widget_settings,
+    update_site_theme,
+    save_content_page,
+    list_directories,
+    upsert_directory_entry,
+    inspect_navigation,
+    update_navigation_item,
     search_site,
 )
 from app.resources.registry import list_resources_metadata, read_resource_content
@@ -62,6 +69,13 @@ def _build_registry() -> None:
     _register(update_global_css.TOOL_SCHEMA, update_global_css.handle)
     _register(update_site_global_settings.TOOL_SCHEMA, update_site_global_settings.handle)
     _register(update_widget_style.TOOL_SCHEMA, update_widget_style.handle)
+    _register(update_widget_settings.TOOL_SCHEMA, update_widget_settings.handle)
+    _register(update_site_theme.TOOL_SCHEMA, update_site_theme.handle)
+    _register(save_content_page.TOOL_SCHEMA, save_content_page.handle)
+    _register(list_directories.TOOL_SCHEMA, list_directories.handle)
+    _register(upsert_directory_entry.TOOL_SCHEMA, upsert_directory_entry.handle)
+    _register(inspect_navigation.TOOL_SCHEMA, inspect_navigation.handle)
+    _register(update_navigation_item.TOOL_SCHEMA, update_navigation_item.handle)
     _register(search_site.TOOL_SCHEMA, search_site.handle)
 
 
