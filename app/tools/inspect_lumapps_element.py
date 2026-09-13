@@ -20,10 +20,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.tools.api_error_utils import format_api_error
 from app.tools.widget_template import (
-    collect_template_widgets,
     index_widget_parents,
-    match_template_widget_for_layout_id,
+    pair_layout_and_template,
     widget_identity_ids,
+    widget_type_of,
+    writable_template_id,
 )
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
@@ -39,10 +40,11 @@ TOOL_SCHEMA = {
         "(style.properties palette/header/slideshow, instance.head, stylesheets). "
         "Use content_id + user_email for a page (layout v2 + content.template). "
         "Use site_id + user_email for the site theme. "
-        "Every widget from layout.widgets[] AND content.template (content-list, directory, …) is dumped "
-        "with the complete widgetId/uuid (never truncated), widgetType, properties.settings, "
-        "widgetClass, identifier, and parent row/cell/width. "
-        "Pass that complete widgetId to update_widget_settings / update_widget_style. "
+        "One line per widget. 'use this id for writes' is the content.template uuid "
+        "(layout widgetId is shown as layoutId and is accepted via map). "
+        "Dumps widgetType, properties.settings, properties.class (→ widget-- prefix) vs "
+        "properties.widgetClass (Advanced classes), identifier, directory id, "
+        "content-list cover/thumbnail/footer, and parent row/cell/width. "
         "Set full=true to return complete custom CSS (default false truncates at 8000 chars). "
         "No browser; works via API. Use the result to prepare a safe write "
         "(update_widget_settings, update_widget_style, update_site_theme, update_global_css). "
@@ -74,7 +76,14 @@ TOOL_SCHEMA = {
 
 MAX_CSS_EXCERPT = 8000
 
-_ADVANCED_CLASS_KEYS = ("widgetClass", "identifier", "classes", "classNames", "class")
+_ADVANCED_CLASS_KEYS = ("class", "widgetClass", "identifier", "classes", "classNames")
+_ADVANCED_FIELD_NOTES = {
+    "class": "becomes CSS prefix widget--{value} (Advanced class, e.g. grok-home-news → widget--grok-home-news)",
+    "widgetClass": "Advanced classes (comma-separated, e.g. grok-news, grok-pills) — not the widget-- prefix",
+    "identifier": "Advanced identifier",
+    "classes": "extra classes",
+    "classNames": "classNames",
+}
 
 
 def _flatten_style(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -89,6 +98,44 @@ def _flatten_style(d: Dict[str, Any]) -> Dict[str, Any]:
         else:
             out[k] = v
     return out
+
+
+def _linked_directory_id(props: Dict[str, Any], settings: Any) -> Optional[str]:
+    """Directory widget's linked directory uid (e.g. 8821612211991448)."""
+    bags: List[Dict[str, Any]] = []
+    if isinstance(settings, dict):
+        bags.append(settings)
+    if isinstance(props, dict):
+        bags.append(props)
+    for bag in bags:
+        for key in ("directory", "directoryId", "directoryUid", "directory_id", "directoryUID"):
+            val = bag.get(key)
+            if isinstance(val, dict):
+                val = val.get("uid") or val.get("id") or val.get("directory")
+            if val is not None and str(val).strip():
+                return str(val).strip()
+    return None
+
+
+def _content_list_visuals(props: Dict[str, Any], settings: Any) -> List[str]:
+    """Call out cover / thumbnail background / high-res when present."""
+    lines: List[str] = []
+    bag = settings if isinstance(settings, dict) else {}
+    props = props if isinstance(props, dict) else {}
+    cover = bag.get("cover") or bag.get("coverImage") or props.get("cover") or props.get("coverImage")
+    if cover is not None:
+        lines.append(f"      content-list cover: {json.dumps(cover)}")
+    thumb = (
+        bag.get("thumbnailBackground")
+        or bag.get("thumbnail")
+        or bag.get("backgroundImage")
+        or props.get("thumbnail")
+    )
+    if thumb is not None:
+        lines.append(f"      content-list thumbnail background: {json.dumps(thumb)}")
+    if bag.get("isHighResolution") is not None:
+        lines.append(f"      content-list isHighResolution: {json.dumps(bag.get('isHighResolution'))}")
+    return lines
 
 
 def _extract_footer(props: Dict[str, Any], settings: Any) -> Optional[Dict[str, Any]]:
@@ -144,21 +191,16 @@ def _format_widget_identity_label(
     template_widget: Optional[Dict[str, Any]] = None,
     raw: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Human/AI label with complete IDs (layout widgetId + template uuid)."""
-    parts: List[str] = []
-    layout_id = _nonempty_id(widget_id)
-    if layout_id and layout_id != "—":
-        parts.append(f"widgetId: {layout_id}")
-    ids = {**_widget_identity_fields(raw), **_widget_identity_fields(template_widget)}
-    uuid = ids.get("uuid")
-    if uuid:
-        parts.append(f"uuid: {uuid}")
-    extra = ids.get("id")
-    if extra and extra != layout_id and extra != uuid:
-        parts.append(f"id: {extra}")
-    if not parts:
-        parts.append("widgetId: —")
-    return ", ".join(parts)
+    """One label: writable template uuid first; layoutId is mapped, not a second widget."""
+    write_id = writable_template_id(template_widget)
+    layout_ids = [i for i in widget_identity_ids(raw) if i != write_id]
+    if write_id:
+        parts = [f"use this id for writes: {write_id}"]
+        if layout_ids:
+            parts.append(f"layoutId: {layout_ids[0]} (accepted via map, not writable alone)")
+        return ", ".join(parts)
+    fallback = layout_ids[0] if layout_ids else (_nonempty_id(widget_id) or "—")
+    return f"layout-only / readOnly id: {fallback} — not writable via update_widget_settings"
 
 
 def _format_widget_entry(
@@ -199,11 +241,21 @@ def _format_widget_entry(
 
     for key in _ADVANCED_CLASS_KEYS:
         if props.get(key) is not None:
-            lines.append(f"      properties.{key}: {props.get(key)!r}")
+            note = _ADVANCED_FIELD_NOTES.get(key, "")
+            suffix = f"  [{note}]" if note else ""
+            lines.append(f"      properties.{key}: {props.get(key)!r}{suffix}")
 
     footer = _extract_footer(props, settings)
     if footer:
-        lines.append(f"      footer: {json.dumps(footer)}")
+        lines.append(f"      footer link: {json.dumps(footer)}")
+
+    w_type_norm = (w_type or "").strip().lower()
+    if "directory" in w_type_norm:
+        dir_id = _linked_directory_id(props, settings)
+        if dir_id:
+            lines.append(f"      linked directory id: {dir_id}")
+    if w_type_norm in ("content-list", "content_list", "contentlist"):
+        lines.extend(_content_list_visuals(props, settings))
 
     if parent:
         lines.append(
@@ -227,58 +279,13 @@ def _parent_for_widget(
     return None
 
 
-def _layout_listed_widgets(layout: Dict[str, Any]) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    for item in layout.get("widgets") or []:
-        w = item.get("widget") or item
-        if isinstance(w, dict):
-            out.append(w)
-    return out
-
-
 def _collect_page_widgets(
     layout: Dict[str, Any],
     content: Optional[Dict[str, Any]],
-) -> List[Tuple[Dict[str, Any], Optional[Dict[str, Any]]]]:
-    """
-    Every widget from layout.widgets[], layout.components, and content.template.
-    Template node is attached when present so settings dump even for template-only widgets.
-    """
+) -> List[Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]]:
+    """One pair per logical widget (template uuid is the write id)."""
     template = (content or {}).get("template") or {}
-    template_widgets = collect_template_widgets(template.get("components") or [])
-    layout_tree = collect_template_widgets(layout.get("components") or [])
-
-    seen: set = set()
-    ordered: List[Tuple[Dict[str, Any], Optional[Dict[str, Any]]]] = []
-
-    def _match_template(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        ids = set(widget_identity_ids(node))
-        for tw in template_widgets:
-            if ids & set(widget_identity_ids(tw)):
-                return tw
-        return None
-
-    def _add(node: Dict[str, Any], template_widget: Optional[Dict[str, Any]]) -> None:
-        ids = set(widget_identity_ids(node)) | set(widget_identity_ids(template_widget))
-        if ids and ids & seen:
-            return
-        seen.update(ids)
-        ordered.append((node, template_widget))
-
-    for w in _layout_listed_widgets(layout):
-        w_id = _nonempty_id(w.get("widgetId")) or _nonempty_id(w.get("id")) or ""
-        tw = _match_template(w)
-        if tw is None and w_id and template:
-            tw = match_template_widget_for_layout_id(layout, template, w_id)
-        _add(w, tw)
-
-    for node in layout_tree:
-        _add(node, _match_template(node))
-
-    for tw in template_widgets:
-        _add(tw, tw)
-
-    return ordered
+    return pair_layout_and_template(layout, template)
 
 
 def _format_layout_response(
@@ -306,18 +313,17 @@ def _format_layout_response(
         lines.append("No widgets in this layout or content.template.")
         return "\n".join(lines)
 
-    lines.append("--- Widgets (type, full widgetId/uuid, settings, Advanced, style) ---")
+    lines.append(
+        "--- Widgets (one line per widget; use this id for writes = template uuid) ---"
+    )
     for raw, template_widget in page_widgets:
+        node = template_widget or raw or {}
+        write_id = writable_template_id(template_widget)
         ids = widget_identity_ids(template_widget) or widget_identity_ids(raw)
-        w_id = ids[0] if ids else "—"
-        w_type = (
-            (template_widget or {}).get("widgetType")
-            or raw.get("widgetType")
-            or raw.get("body", {}).get("type")
-            or "—"
-        )
+        w_id = write_id or (ids[0] if ids else "—")
+        w_type = widget_type_of(node) or "—"
         parent = _parent_for_widget(w_id, parents, template_widget, raw)
-        lines.extend(_format_widget_entry(w_id, w_type, raw, template_widget, parent))
+        lines.extend(_format_widget_entry(w_id, w_type, raw or {}, template_widget, parent))
         lines.append("")
 
     layout_components = layout.get("components") or []

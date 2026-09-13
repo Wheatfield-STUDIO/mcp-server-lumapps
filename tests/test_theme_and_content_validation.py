@@ -118,7 +118,8 @@ def test_inspect_widget_and_full_css_flag() -> None:
     assert "See all" in blob
     assert "width=12" in blob
     assert FULL_TEMPLATE_UUID in blob
-    assert "uuid:" in blob
+    assert "use this id for writes" in blob
+    assert "widget--" in blob or "Advanced" in blob
 
     long_css = "x" * (MAX_CSS_EXCERPT + 50)
     truncated = _format_style_response(
@@ -174,7 +175,6 @@ def test_inspect_returns_full_widget_ids_not_truncated() -> None:
                                 "type": "widget",
                                 "widgetType": "directory",
                                 "widgetId": "dir-" + FULL_WIDGET_ID,
-                                "uuid": FULL_TEMPLATE_UUID,
                             },
                         ],
                     }
@@ -203,9 +203,9 @@ def test_inspect_returns_full_widget_ids_not_truncated() -> None:
     assert f"id={FULL_WIDGET_ID[:8]}..." not in text
     tree = _summary_components(layout["components"], 0)
     assert FULL_WIDGET_ID in tree
-    assert FULL_TEMPLATE_UUID in tree
     assert "id=" + FULL_WIDGET_ID[:8] + "..." not in tree
     assert "..." not in tree
+    assert "use this id for writes: " + FULL_TEMPLATE_UUID in text
 
 
 def test_inspect_dumps_template_only_widget_settings() -> None:
@@ -236,6 +236,7 @@ def test_inspect_dumps_template_only_widget_settings() -> None:
                                     "widgetType": "content-list",
                                     "uuid": list_uuid,
                                     "properties": {
+                                        "class": "grok-home-news",
                                         "widgetClass": "image-arrondie, pilules-meta",
                                         "identifier": "home-news",
                                         "settings": {
@@ -244,6 +245,8 @@ def test_inspect_dumps_template_only_widget_settings() -> None:
                                             "types": ["news"],
                                             "fields": {"title": True},
                                             "isHighResolution": True,
+                                            "cover": "media-cover-1",
+                                            "thumbnailBackground": "#f0f1f5",
                                         },
                                     },
                                 },
@@ -253,7 +256,7 @@ def test_inspect_dumps_template_only_widget_settings() -> None:
                                     "uuid": dir_uuid,
                                     "properties": {
                                         "identifier": "key-refs",
-                                        "settings": {"displayMode": "catalogue", "directory": "dir-99"},
+                                        "settings": {"displayMode": "catalogue", "directory": "8821612211991448"},
                                     },
                                 },
                             ],
@@ -272,9 +275,60 @@ def test_inspect_dumps_template_only_widget_settings() -> None:
     assert "itemsPerLine" in text
     assert "image-arrondie, pilules-meta" in text
     assert "displayMode" in text
-    assert "dir-99" in text
+    assert "8821612211991448" in text
+    assert "linked directory id" in text
     assert "width=8" in text
     assert "content.template.components" in text
+    assert "use this id for writes" in text
+    assert "properties.class" in text
+    assert "widget--grok-home-news" in text or "widget--" in text
+    assert "properties.widgetClass" in text
+    assert "content-list cover" in text
+    assert "thumbnail background" in text
+
+
+def test_inspect_unique_widget_count_pairs_layout_and_template() -> None:
+    """5 real widgets must not become 7 (layout copy + template copy)."""
+    layout = {
+        "widgets": [
+            {"widget": {"widgetId": "lay-title", "widgetType": "title", "body": {"text": "Home"}}},
+            {"widget": {"widgetId": "lay-html", "widgetType": "html", "body": {}}},
+            {"widget": {"widgetId": "lay-hero", "widgetType": "featured-image", "body": {}}},
+            {"widget": {"widgetId": "031d03b3-1111-2222-3333-444455556666", "widgetType": "content-list"}},
+            {"widget": {"widgetId": "42d2a09e-1111-2222-3333-444455556666", "widgetType": "directory-entry"}},
+        ],
+        "components": [],
+    }
+    content = {
+        "template": {
+            "components": [
+                {"type": "widget", "widgetType": "title", "uuid": "t-title", "properties": {}},
+                {"type": "widget", "widgetType": "html", "uuid": "t-html", "properties": {}},
+                {"type": "widget", "widgetType": "featured-image", "uuid": "t-hero", "properties": {}},
+                {
+                    "type": "widget",
+                    "widgetType": "content-list",
+                    "uuid": "1d06350f-aaaa-bbbb-cccc-ddddeeeeffff",
+                    "properties": {"settings": {"viewMode": "horizontal"}, "class": "grok-home-news"},
+                },
+                {
+                    "type": "widget",
+                    "widgetType": "directory-entry",
+                    "uuid": "cb986a70-aaaa-bbbb-cccc-ddddeeeeffff",
+                    "properties": {"settings": {"directory": "8821612211991448"}},
+                },
+            ]
+        }
+    }
+    text = _format_layout_response(layout, content)
+    assert text.count("  • ") == 5
+    assert text.count("use this id for writes:") == 5
+    assert "use this id for writes: 1d06350f-aaaa-bbbb-cccc-ddddeeeeffff" in text
+    assert "layoutId: 031d03b3-1111-2222-3333-444455556666" in text
+    assert "use this id for writes: cb986a70-aaaa-bbbb-cccc-ddddeeeeffff" in text
+    assert "layoutId: 42d2a09e-1111-2222-3333-444455556666" in text
+    assert "widget--" in text
+    assert "8821612211991448" in text
 
 
 def test_featured_image_media_id_only() -> None:

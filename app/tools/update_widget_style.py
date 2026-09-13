@@ -39,7 +39,13 @@ TOOL_SCHEMA = {
         "type": "object",
         "properties": {
             "content_id": {"type": "string", "description": "LumApps content/page ID (e.g. homepage)."},
-            "widget_id": {"type": "string", "description": "Widget ID (widgetId from the layout)."},
+            "widget_id": {
+                "type": "string",
+                "description": (
+                    "Template uuid from inspect ('use this id for writes'). "
+                    "A layout widgetId is also accepted and mapped to the template uuid."
+                ),
+            },
             "style_updates": {"type": "string", "description": "JSON object: body.style (paddingTop, paddingBottom, marginTop...), style (border, margin...). Example: {\"body\": {\"style\": {\"paddingTop\": 8}}}."},
             "user_email": {"type": "string", "description": "User email for LumApps API token."},
         },

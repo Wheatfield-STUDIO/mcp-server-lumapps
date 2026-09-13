@@ -52,6 +52,140 @@ def widget_identity_ids(node: Optional[Dict[str, Any]]) -> List[str]:
     return out
 
 
+def normalize_widget_type(widget_type: Optional[str]) -> str:
+    raw = (widget_type or "").strip().lower()
+    if raw in ("directory", "directory-entry", "directory_entry", "directoryentry"):
+        return "directory"
+    return raw
+
+
+def widget_type_of(node: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(node, dict):
+        return ""
+    nested = node.get("widget") if isinstance(node.get("widget"), dict) else {}
+    return (
+        node.get("widgetType")
+        or nested.get("widgetType")
+        or (node.get("body") or {}).get("type")
+        or nested.get("body", {}).get("type")
+        or ""
+    ).strip()
+
+
+def writable_template_id(template_widget: Optional[Dict[str, Any]]) -> Optional[str]:
+    """UUID to pass to update_widget_settings / update_widget_style."""
+    if not isinstance(template_widget, dict):
+        return None
+    return (
+        (template_widget.get("uuid") or "").strip()
+        or (template_widget.get("widgetId") or "").strip()
+        or (template_widget.get("id") or "").strip()
+        or None
+    )
+
+
+def iter_layout_widgets(layout: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Unique widgets from layout.widgets[] then layout.components (full IDs, first wins)."""
+    if not isinstance(layout, dict):
+        return []
+    seen = set()
+    out: List[Dict[str, Any]] = []
+
+    def add(node: Dict[str, Any]) -> None:
+        if not isinstance(node, dict):
+            return
+        ids = widget_identity_ids(node)
+        if ids and any(i in seen for i in ids):
+            return
+        seen.update(ids)
+        out.append(node)
+
+    for item in layout.get("widgets") or []:
+        add(item.get("widget") or item)
+    for node in collect_template_widgets(layout.get("components") or []):
+        add(node)
+    return out
+
+
+def pair_layout_and_template(
+    layout: Optional[Dict[str, Any]],
+    template: Optional[Dict[str, Any]],
+) -> List[Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]]:
+    """
+    One pair per logical widget. Template node is the writable side.
+    Layout-only ghosts (no settings, no body text) are omitted.
+    """
+    layout_ws = iter_layout_widgets(layout)
+    template_ws = collect_template_widgets((template or {}).get("components") or [])
+    used_l: set = set()
+    used_t: set = set()
+    pairs: List[Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]] = []
+
+    for i, lw in enumerate(layout_ws):
+        lids = set(widget_identity_ids(lw))
+        if not lids:
+            continue
+        for j, tw in enumerate(template_ws):
+            if j in used_t:
+                continue
+            if lids & set(widget_identity_ids(tw)):
+                pairs.append((lw, tw))
+                used_l.add(i)
+                used_t.add(j)
+                break
+
+    by_type: Dict[str, List[int]] = {}
+    for j, tw in enumerate(template_ws):
+        if j in used_t:
+            continue
+        by_type.setdefault(normalize_widget_type(widget_type_of(tw)), []).append(j)
+    cursor: Dict[str, int] = {}
+    for i, lw in enumerate(layout_ws):
+        if i in used_l:
+            continue
+        nt = normalize_widget_type(widget_type_of(lw))
+        pool = by_type.get(nt) or []
+        cur = cursor.get(nt, 0)
+        if cur < len(pool):
+            j = pool[cur]
+            cursor[nt] = cur + 1
+            pairs.append((lw, template_ws[j]))
+            used_l.add(i)
+            used_t.add(j)
+
+    for j, tw in enumerate(template_ws):
+        if j not in used_t:
+            pairs.append((None, tw))
+
+    for i, lw in enumerate(layout_ws):
+        if i in used_l:
+            continue
+        props = lw.get("properties") if isinstance(lw.get("properties"), dict) else {}
+        settings = props.get("settings")
+        body = lw.get("body") if isinstance(lw.get("body"), dict) else {}
+        if settings or props.get("widgetClass") or props.get("class") or body.get("text"):
+            pairs.append((lw, None))
+
+    return pairs
+
+
+def resolve_template_widget(
+    template: Dict[str, Any],
+    widget_id: str,
+    layout: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Find the writable template widget. Accepts template uuid or layout widgetId."""
+    target = find_template_widget(template, widget_id=widget_id)
+    if target is not None:
+        return target
+    if not layout:
+        return None
+    w_type, type_index = type_index_for_layout_widget(layout, widget_id)
+    if w_type is None:
+        return None
+    return find_template_widget(template, widget_type=w_type, type_index=type_index)
+
+
 def deep_merge(base: Dict[str, Any], updates: Dict[str, Any]) -> None:
     """Merge updates into base in place. Dict values recurse; other values replace."""
     for k, v in updates.items():
@@ -115,26 +249,27 @@ def index_widget_parents(components: List[Dict[str, Any]]) -> Dict[str, Dict[str
 def find_layout_widget(
     layout: Dict[str, Any], widget_id: str
 ) -> Tuple[Optional[int], Optional[str], Optional[Dict[str, Any]]]:
-    """Return (layout_index, widgetType, raw_widget) for widget_id, or (None, None, None)."""
-    widgets_layout = layout.get("widgets") or []
-    for i, item in enumerate(widgets_layout):
-        w = item.get("widget") or item
-        if (w.get("widgetId") or w.get("id")) == widget_id:
-            w_type = (w.get("widgetType") or w.get("body", {}).get("type") or "").strip()
-            return i, w_type or None, w
+    """Return (index in iter_layout_widgets, widgetType, raw_widget) for widget_id."""
+    needle = str(widget_id).strip()
+    widgets_layout = iter_layout_widgets(layout)
+    for i, w in enumerate(widgets_layout):
+        ids = widget_identity_ids(w)
+        if needle in ids:
+            return i, widget_type_of(w) or None, w
+        if len(needle) >= 8 and any(vid.startswith(needle) for vid in ids):
+            return i, widget_type_of(w) or None, w
     return None, None, None
 
 
 def type_index_for_layout_widget(layout: Dict[str, Any], widget_id: str) -> Tuple[Optional[str], Optional[int]]:
-    """Occurrence index of widget_id among layout widgets of the same widgetType."""
-    widgets_layout = layout.get("widgets") or []
+    """Occurrence index of widget_id among layout widgets of the same (normalized) type."""
+    widgets_layout = iter_layout_widgets(layout)
     idx, w_type, _ = find_layout_widget(layout, widget_id)
     if idx is None or not w_type:
         return None, None
+    nt = normalize_widget_type(w_type)
     same_type_indices = [
-        i
-        for i, item in enumerate(widgets_layout)
-        if (item.get("widget") or item).get("widgetType") == w_type
+        i for i, w in enumerate(widgets_layout) if normalize_widget_type(widget_type_of(w)) == nt
     ]
     try:
         return w_type, same_type_indices.index(idx)
@@ -168,7 +303,8 @@ def find_template_widget(
         if len(prefix_hits) == 1:
             return prefix_hits[0]
     if widget_type is not None and type_index is not None:
-        by_type = [tw for tw in widgets if (tw.get("widgetType") or "").strip() == widget_type]
+        nt = normalize_widget_type(widget_type)
+        by_type = [tw for tw in widgets if normalize_widget_type(widget_type_of(tw)) == nt]
         if 0 <= type_index < len(by_type):
             return by_type[type_index]
     return None
@@ -290,14 +426,7 @@ async def save_widget_template_patch(
                     resolved_layout = await lumapps_client.get_content_layout(content_id, token=token)
                 except Exception:
                     resolved_layout = None
-            if resolved_layout:
-                w_type, type_index = type_index_for_layout_widget(resolved_layout, widget_id)
-                if w_type is not None:
-                    target = find_template_widget(
-                        template,
-                        widget_type=w_type,
-                        type_index=type_index,
-                    )
+            target = resolve_template_widget(template, widget_id, resolved_layout)
         if target is None:
             return False, f"Widget {widget_id!r} not found in content.template.", None
 

@@ -56,7 +56,11 @@ TOOL_SCHEMA = {
             "content_id": {"type": "string", "description": "LumApps content/page ID (e.g. homepage)."},
             "widget_id": {
                 "type": "string",
-                "description": "Full widget UUID from inspect (layout widgetId or content.template uuid). Do not pass an 8-character prefix.",
+                "description": (
+                    "Template uuid from inspect ('use this id for writes'). "
+                    "A layout widgetId is also accepted and mapped to the same template widget. "
+                    "Prefer the full uuid, not an 8-character prefix."
+                ),
             },
             "settings_updates": {
                 "type": "string",

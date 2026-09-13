@@ -23,7 +23,9 @@ from app.tools.widget_template import (
     deep_merge,
     find_template_widget,
     index_widget_parents,
+    pair_layout_and_template,
     pick_settings_highlights,
+    resolve_template_widget,
     save_widget_template_patch,
     strip_properties_style,
 )
@@ -139,6 +141,53 @@ def test_find_template_only_widget_by_full_uuid_and_prefix() -> None:
     assert full is not None and full["widgetType"] == "content-list"
     prefix = find_template_widget(template, widget_id="031d03b3")
     assert prefix is not None and prefix["uuid"] == TEMPLATE_ONLY_UUID
+
+
+def test_write_by_layout_id_resolves_to_template() -> None:
+    layout = {
+        "widgets": [
+            {"widget": {"widgetId": "031d03b3-1111-2222-3333-444455556666", "widgetType": "content-list"}},
+        ]
+    }
+    template = {
+        "components": [
+            {
+                "type": "widget",
+                "widgetType": "content-list",
+                "uuid": "1d06350f-aaaa-bbbb-cccc-ddddeeeeffff",
+                "properties": {"settings": {"count": 1}},
+            }
+        ]
+    }
+    pairs = pair_layout_and_template(layout, template)
+    assert len(pairs) == 1
+    assert pairs[0][1]["uuid"] == "1d06350f-aaaa-bbbb-cccc-ddddeeeeffff"
+    target = resolve_template_widget(template, "031d03b3-1111-2222-3333-444455556666", layout)
+    assert target is not None and target["uuid"] == "1d06350f-aaaa-bbbb-cccc-ddddeeeeffff"
+
+    page = {
+        "uid": "5686867710165115",
+        "template": template,
+    }
+    with (
+        patch("app.tools.widget_template.lumapps_client.get_content", new_callable=AsyncMock) as get_content,
+        patch("app.tools.widget_template.lumapps_client.save_content", new_callable=AsyncMock) as save_content,
+    ):
+        get_content.return_value = page
+        save_content.return_value = {}
+        ok, _, saved = asyncio.run(
+            save_widget_template_patch(
+                "5686867710165115",
+                "031d03b3-1111-2222-3333-444455556666",
+                {"properties": {"settings": {"count": 9}}},
+                "admin-tok",
+                layout=layout,
+                protect_style=True,
+            )
+        )
+    assert ok
+    assert saved["uuid"] == "1d06350f-aaaa-bbbb-cccc-ddddeeeeffff"
+    assert saved["properties"]["settings"]["count"] == 9
 
 
 def test_save_template_patch_gets_then_merges() -> None:
