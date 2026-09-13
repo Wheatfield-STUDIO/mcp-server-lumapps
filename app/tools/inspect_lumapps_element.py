@@ -16,13 +16,14 @@
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.tools.api_error_utils import format_api_error
 from app.tools.widget_template import (
     collect_template_widgets,
     index_widget_parents,
     match_template_widget_for_layout_id,
+    widget_identity_ids,
 )
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
@@ -38,7 +39,9 @@ TOOL_SCHEMA = {
         "(style.properties palette/header/slideshow, instance.head, stylesheets). "
         "Use content_id + user_email for a page (layout v2 + content.template). "
         "Use site_id + user_email for the site theme. "
-        "Widget identities are returned in full (layout widgetId and template uuid) — never truncated. "
+        "Every widget from layout.widgets[] AND content.template (content-list, directory, …) is dumped "
+        "with the complete widgetId/uuid (never truncated), widgetType, properties.settings, "
+        "widgetClass, identifier, and parent row/cell/width. "
         "Pass that complete widgetId to update_widget_settings / update_widget_style. "
         "Set full=true to return complete custom CSS (default false truncates at 8000 chars). "
         "No browser; works via API. Use the result to prepare a safe write "
@@ -118,16 +121,21 @@ def _widget_identity_fields(node: Optional[Dict[str, Any]]) -> Dict[str, str]:
     """Collect full widgetId / uuid / id from a layout or template node."""
     if not isinstance(node, dict):
         return {}
+    layers = [node]
+    nested = node.get("widget")
+    if isinstance(nested, dict):
+        layers.append(nested)
     out: Dict[str, str] = {}
-    widget_id = _nonempty_id(node.get("widgetId"))
-    uuid = _nonempty_id(node.get("uuid"))
-    extra = _nonempty_id(node.get("id"))
-    if widget_id:
-        out["widgetId"] = widget_id
-    if uuid:
-        out["uuid"] = uuid
-    if extra and extra not in out.values():
-        out["id"] = extra
+    for layer in layers:
+        widget_id = _nonempty_id(layer.get("widgetId"))
+        uuid = _nonempty_id(layer.get("uuid"))
+        extra = _nonempty_id(layer.get("id"))
+        if widget_id:
+            out["widgetId"] = widget_id
+        if uuid:
+            out["uuid"] = uuid
+        if extra and extra not in out.values():
+            out["id"] = extra
     return out
 
 
@@ -208,16 +216,69 @@ def _parent_for_widget(
     widget_id: str,
     parents: Dict[str, Dict[str, Any]],
     template_widget: Optional[Dict[str, Any]],
+    raw: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
+    for node in (raw, template_widget):
+        for tid in widget_identity_ids(node):
+            if tid in parents:
+                return parents[tid]
     if widget_id in parents:
         return parents[widget_id]
-    if not template_widget:
-        return None
-    for key in ("uuid", "widgetId", "id"):
-        tid = template_widget.get(key)
-        if isinstance(tid, str) and tid in parents:
-            return parents[tid]
     return None
+
+
+def _layout_listed_widgets(layout: Dict[str, Any]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for item in layout.get("widgets") or []:
+        w = item.get("widget") or item
+        if isinstance(w, dict):
+            out.append(w)
+    return out
+
+
+def _collect_page_widgets(
+    layout: Dict[str, Any],
+    content: Optional[Dict[str, Any]],
+) -> List[Tuple[Dict[str, Any], Optional[Dict[str, Any]]]]:
+    """
+    Every widget from layout.widgets[], layout.components, and content.template.
+    Template node is attached when present so settings dump even for template-only widgets.
+    """
+    template = (content or {}).get("template") or {}
+    template_widgets = collect_template_widgets(template.get("components") or [])
+    layout_tree = collect_template_widgets(layout.get("components") or [])
+
+    seen: set = set()
+    ordered: List[Tuple[Dict[str, Any], Optional[Dict[str, Any]]]] = []
+
+    def _match_template(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        ids = set(widget_identity_ids(node))
+        for tw in template_widgets:
+            if ids & set(widget_identity_ids(tw)):
+                return tw
+        return None
+
+    def _add(node: Dict[str, Any], template_widget: Optional[Dict[str, Any]]) -> None:
+        ids = set(widget_identity_ids(node)) | set(widget_identity_ids(template_widget))
+        if ids and ids & seen:
+            return
+        seen.update(ids)
+        ordered.append((node, template_widget))
+
+    for w in _layout_listed_widgets(layout):
+        w_id = _nonempty_id(w.get("widgetId")) or _nonempty_id(w.get("id")) or ""
+        tw = _match_template(w)
+        if tw is None and w_id and template:
+            tw = match_template_widget_for_layout_id(layout, template, w_id)
+        _add(w, tw)
+
+    for node in layout_tree:
+        _add(node, _match_template(node))
+
+    for tw in template_widgets:
+        _add(tw, tw)
+
+    return ordered
 
 
 def _format_layout_response(
@@ -235,32 +296,39 @@ def _format_layout_response(
         lines.insert(3, f"Content ID: {content.get('uid') or content.get('id') or '—'}")
         lines.insert(4, f"Content type: {content.get('type') or content.get('customContentType') or '—'}")
 
-    widgets = layout.get("widgets") or []
     template = (content or {}).get("template") or {}
     layout_parents = index_widget_parents(layout.get("components") or [])
     template_parents = index_widget_parents(template.get("components") or [])
     parents = {**template_parents, **layout_parents}
 
-    if not widgets:
-        lines.append("No widgets in this layout.")
+    page_widgets = _collect_page_widgets(layout, content)
+    if not page_widgets:
+        lines.append("No widgets in this layout or content.template.")
         return "\n".join(lines)
 
-    lines.append("--- Widgets (type, id, settings, Advanced, style) ---")
-    for item in widgets:
-        w = item.get("widget") or item
-        w_id = _nonempty_id(w.get("widgetId")) or _nonempty_id(w.get("id")) or "—"
-        w_type = w.get("widgetType") or w.get("body", {}).get("type") or "—"
-        template_widget = None
-        if template:
-            template_widget = match_template_widget_for_layout_id(layout, template, w_id)
-        parent = _parent_for_widget(w_id, parents, template_widget)
-        lines.extend(_format_widget_entry(w_id, w_type, w, template_widget, parent))
+    lines.append("--- Widgets (type, full widgetId/uuid, settings, Advanced, style) ---")
+    for raw, template_widget in page_widgets:
+        ids = widget_identity_ids(template_widget) or widget_identity_ids(raw)
+        w_id = ids[0] if ids else "—"
+        w_type = (
+            (template_widget or {}).get("widgetType")
+            or raw.get("widgetType")
+            or raw.get("body", {}).get("type")
+            or "—"
+        )
+        parent = _parent_for_widget(w_id, parents, template_widget, raw)
+        lines.extend(_format_widget_entry(w_id, w_type, raw, template_widget, parent))
         lines.append("")
 
-    components = layout.get("components") or []
-    if components:
-        lines.append("--- Structure (components tree) ---")
-        lines.append(_summary_components(components, indent=0))
+    layout_components = layout.get("components") or []
+    if layout_components:
+        lines.append("--- Structure (layout.components, full IDs) ---")
+        lines.append(_summary_components(layout_components, indent=0))
+    template_components = template.get("components") or []
+    if template_components:
+        lines.append("")
+        lines.append("--- Structure (content.template.components, full IDs) ---")
+        lines.append(_summary_components(template_components, indent=0))
     return "\n".join(lines).strip()
 
 
@@ -271,7 +339,8 @@ def _summary_components(components: List[Dict], indent: int) -> str:
     for c in components:
         t = c.get("type") or "?"
         if t == "widget":
-            w_type = c.get("widgetType", "?")
+            inner = c.get("widget") if isinstance(c.get("widget"), dict) else {}
+            w_type = c.get("widgetType") or inner.get("widgetType") or "?"
             ids = _widget_identity_fields(c)
             id_bits = [f"{k}={v}" for k, v in ids.items()]
             if not id_bits:
@@ -409,44 +478,6 @@ def _format_style_response(
     return "\n".join(lines).strip()
 
 
-async def _append_widget_block_schemas(
-    text: str,
-    content: Dict[str, Any],
-    layout: Dict[str, Any],
-    token: str,
-) -> str:
-    """Attach get_widget_blocks settings schema for each widgetType on the page."""
-    instance = content.get("instance")
-    if isinstance(instance, dict):
-        site_id = instance.get("uid") or instance.get("id")
-    else:
-        site_id = instance
-    if not site_id:
-        return text
-
-    types: List[str] = []
-    for item in layout.get("widgets") or []:
-        w = item.get("widget") or item
-        w_type = (w.get("widgetType") or w.get("body", {}).get("type") or "").strip()
-        if w_type and w_type not in types:
-            types.append(w_type)
-    if not types:
-        template_widgets = collect_template_widgets((content.get("template") or {}).get("components") or [])
-        for tw in template_widgets:
-            w_type = (tw.get("widgetType") or "").strip()
-            if w_type and w_type not in types:
-                types.append(w_type)
-
-    extra: List[str] = ["", "--- Widget settings schema (get_widget_blocks) ---"]
-    for w_type in types:
-        try:
-            blocks = await lumapps_client.get_widget_blocks(w_type, str(site_id), token=token)
-            extra.append(f"widgetType={w_type!r}: {json.dumps(blocks)}")
-        except Exception as e:
-            extra.append(f"widgetType={w_type!r}: (blocks unavailable: {format_api_error(e)})")
-    return text + "\n" + "\n".join(extra)
-
-
 async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     content_id = arguments.get("content_id")
     site_id = arguments.get("site_id")
@@ -474,11 +505,6 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
             except Exception as e:
                 logger.warning("inspect_lumapps_element get_content failed (layout-only fallback): %s", e)
             text = _format_layout_response(layout, content)
-            if content:
-                try:
-                    text = await _append_widget_block_schemas(text, content, layout, token)
-                except Exception as e:
-                    logger.warning("inspect_lumapps_element get_widget_blocks failed: %s", e)
             return {"content": [{"type": "text", "text": text}]}
         except Exception as e:
             logger.exception("inspect_lumapps_element layout API failed")

@@ -208,6 +208,75 @@ def test_inspect_returns_full_widget_ids_not_truncated() -> None:
     assert "..." not in tree
 
 
+def test_inspect_dumps_template_only_widget_settings() -> None:
+    """content-list / directory-entry often exist only in content.template, not layout.widgets[]."""
+    list_uuid = "031d03b3-aaaa-bbbb-cccc-ddddeeeeffff"
+    dir_uuid = "42d2a09e-1111-2222-3333-444455556666"
+    layout = {
+        "id": "lay-1",
+        "widgets": [
+            {"widget": {"widgetId": "title-only-id", "widgetType": "title", "body": {"text": "Home"}}},
+        ],
+        "components": [],
+    }
+    content = {
+        "uid": "5686867710165115",
+        "type": "page",
+        "template": {
+            "components": [
+                {
+                    "type": "row",
+                    "cells": [
+                        {
+                            "type": "cell",
+                            "width": 8,
+                            "components": [
+                                {
+                                    "type": "widget",
+                                    "widgetType": "content-list",
+                                    "uuid": list_uuid,
+                                    "properties": {
+                                        "widgetClass": "image-arrondie, pilules-meta",
+                                        "identifier": "home-news",
+                                        "settings": {
+                                            "viewMode": "horizontal",
+                                            "itemsPerLine": 3,
+                                            "types": ["news"],
+                                            "fields": {"title": True},
+                                            "isHighResolution": True,
+                                        },
+                                    },
+                                },
+                                {
+                                    "type": "widget",
+                                    "widgetType": "directory-entry",
+                                    "uuid": dir_uuid,
+                                    "properties": {
+                                        "identifier": "key-refs",
+                                        "settings": {"displayMode": "catalogue", "directory": "dir-99"},
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+    text = _format_layout_response(layout, content)
+    assert list_uuid in text
+    assert dir_uuid in text
+    assert "031d03b3..." not in text
+    assert "42d2a09e..." not in text
+    assert "viewMode" in text
+    assert "itemsPerLine" in text
+    assert "image-arrondie, pilules-meta" in text
+    assert "displayMode" in text
+    assert "dir-99" in text
+    assert "width=8" in text
+    assert "content.template.components" in text
+
+
 def test_featured_image_media_id_only() -> None:
     content: dict = {}
     apply_featured_image(content, "media-42")

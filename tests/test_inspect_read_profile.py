@@ -86,14 +86,16 @@ def test_inspect_layout_uses_read_oauth() -> None:
         gt.return_value = "read-tok"
         gl.return_value = {"rows": []}
         gc.return_value = {"uid": "c1", "template": {"components": []}}
-        gb.return_value = []
+        gb.side_effect = AssertionError("get_widget_blocks must not be called (400 ownerResourceId)")
         result = asyncio.run(
             inspect_lumapps_element.handle({"content_id": "c1", "user_email": "dev@example.com"})
         )
     gt.assert_called_once_with(user_email="dev@example.com")
+    gb.assert_not_called()
     text = result["content"][0]["text"]
     assert "Admin tools require" not in text
     assert "Layout inspection failed" not in text
+    assert "get_widget_blocks" not in text
 
 
 def test_inspect_navigation_uses_read_oauth() -> None:

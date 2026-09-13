@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Inspect uses read OAuth**: `inspect_lumapps_element` (layout and site theme) and `inspect_navigation` request LumApps `profile=read`. They no longer need `LUMAPPS_ADMIN_*` / `all.admin`. Write tools still use `profile=admin`.
 - **Inspect returns full widget IDs**: layout `widgetId` and template `uuid` are printed in full (including the components tree). IDs are no longer truncated to 8 characters, so `update_widget_settings` / `update_widget_style` can use the real widgetId.
+- **Inspect dumps every template widget**: content-list / directory widgets that exist only in `content.template` now get a full dump (uuid, settings, widgetClass, identifier, parent). `get_widget_blocks` is no longer called (it 400s without `ownerResourceId` and does not help).
+- **content/save revision**: widget writes GET the current page, merge, then save, and are serialized per `content_id` to avoid `CONTENT_NOT_UP_TO_DATE`. `update_widget_settings` matches `content.template` by full uuid (optional 8-char prefix if unique).
 
 ### Security
 

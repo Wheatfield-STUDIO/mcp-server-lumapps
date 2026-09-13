@@ -14,9 +14,42 @@
 
 """Shared helpers for matching layout widgets to content.template and saving patches."""
 
+import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.services.lumapps_client import lumapps_client
+
+_content_write_locks: Dict[str, asyncio.Lock] = {}
+_locks_guard = asyncio.Lock()
+
+
+async def _lock_for_content(content_id: str) -> asyncio.Lock:
+    """Serialize content/save on the same page so revision stays current."""
+    async with _locks_guard:
+        lock = _content_write_locks.get(content_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _content_write_locks[content_id] = lock
+        return lock
+
+
+def widget_identity_ids(node: Optional[Dict[str, Any]]) -> List[str]:
+    """Full uuid / widgetId / id values on a widget node. Never truncated."""
+    if not isinstance(node, dict):
+        return []
+    out: List[str] = []
+    seen = set()
+    layers = [node]
+    nested = node.get("widget")
+    if isinstance(nested, dict):
+        layers.append(nested)
+    for layer in layers:
+        for key in ("uuid", "widgetId", "id"):
+            val = layer.get(key)
+            if isinstance(val, str) and val.strip() and val.strip() not in seen:
+                seen.add(val.strip())
+                out.append(val.strip())
+    return out
 
 
 def deep_merge(base: Dict[str, Any], updates: Dict[str, Any]) -> None:
@@ -123,13 +156,17 @@ def find_template_widget(
     components = (template or {}).get("components") or []
     widgets = collect_template_widgets(components)
     if widget_id:
+        needle = str(widget_id).strip()
         for tw in widgets:
-            if widget_id in (
-                tw.get("uuid"),
-                tw.get("widgetId"),
-                tw.get("id"),
-            ):
+            if needle in widget_identity_ids(tw):
                 return tw
+        prefix_hits: List[Dict[str, Any]] = []
+        if len(needle) >= 8:
+            for tw in widgets:
+                if any(vid.startswith(needle) for vid in widget_identity_ids(tw)):
+                    prefix_hits.append(tw)
+        if len(prefix_hits) == 1:
+            return prefix_hits[0]
     if widget_type is not None and type_index is not None:
         by_type = [tw for tw in widgets if (tw.get("widgetType") or "").strip() == widget_type]
         if 0 <= type_index < len(by_type):
@@ -235,35 +272,38 @@ async def save_widget_template_patch(
     protect_style: bool = False,
 ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
     """
-    Find widget in layout, match to content.template, deep-merge delta, save_content.
-    When protect_style is True, properties.style in delta is discarded.
+    GET current content (revision), find the widget in content.template, deep-merge, save.
+    Template-only widgets (content-list, directory) are matched by uuid/widgetId.
+    Writes on the same content_id are serialized. When protect_style is True,
+    properties.style in delta is discarded.
     Returns (success, message, target_widget_after_merge).
     """
-    if layout is None:
-        layout = await lumapps_client.get_content_layout(content_id, token=token)
+    lock = await _lock_for_content(content_id)
+    async with lock:
+        content = await lumapps_client.get_content(content_id, token=token)
+        template = content.get("template") or {}
+        target = find_template_widget(template, widget_id=widget_id)
+        if target is None:
+            resolved_layout = layout
+            if resolved_layout is None:
+                try:
+                    resolved_layout = await lumapps_client.get_content_layout(content_id, token=token)
+                except Exception:
+                    resolved_layout = None
+            if resolved_layout:
+                w_type, type_index = type_index_for_layout_widget(resolved_layout, widget_id)
+                if w_type is not None:
+                    target = find_template_widget(
+                        template,
+                        widget_type=w_type,
+                        type_index=type_index,
+                    )
+        if target is None:
+            return False, f"Widget {widget_id!r} not found in content.template.", None
 
-    w_type, type_index = type_index_for_layout_widget(layout, widget_id)
-    if not w_type:
-        return False, f"Widget {widget_id!r} not found in layout.", None
+        patch = strip_properties_style(delta) if protect_style else delta
+        if patch:
+            deep_merge(target, patch)
 
-    content = await lumapps_client.get_content(content_id, token=token)
-    template = content.get("template") or {}
-    target = find_template_widget(
-        template,
-        widget_id=widget_id,
-        widget_type=w_type,
-        type_index=type_index,
-    )
-    if target is None:
-        return (
-            False,
-            f"Widget type {w_type!r} at index {type_index} not found in content.template.",
-            None,
-        )
-
-    patch = strip_properties_style(delta) if protect_style else delta
-    if patch:
-        deep_merge(target, patch)
-
-    await lumapps_client.save_content(token=token, data=content, send_notifications=False)
-    return True, "Content saved.", target
+        await lumapps_client.save_content(token=token, data=content, send_notifications=False)
+        return True, "Content saved.", target

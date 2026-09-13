@@ -54,7 +54,10 @@ TOOL_SCHEMA = {
         "type": "object",
         "properties": {
             "content_id": {"type": "string", "description": "LumApps content/page ID (e.g. homepage)."},
-            "widget_id": {"type": "string", "description": "Widget ID (widgetId from inspect_lumapps_element)."},
+            "widget_id": {
+                "type": "string",
+                "description": "Full widget UUID from inspect (layout widgetId or content.template uuid). Do not pass an 8-character prefix.",
+            },
             "settings_updates": {
                 "type": "string",
                 "description": (
@@ -112,11 +115,16 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
+    except Exception as e:
+        logger.exception("update_widget_settings get_token failed")
+        text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Failed to get admin token: {format_api_error(e)}"
+        return {"content": [{"type": "text", "text": text}]}
+
+    layout = None
+    try:
         layout = await lumapps_client.get_content_layout(content_id, token=token)
     except Exception as e:
-        logger.exception("update_widget_settings get_content_layout failed")
-        text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Failed to load layout: {format_api_error(e)}"
-        return {"content": [{"type": "text", "text": text}]}
+        logger.warning("update_widget_settings get_content_layout skipped (template match still runs): %s", e)
 
     try:
         ok, msg, target = await save_widget_template_patch(

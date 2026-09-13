@@ -14,6 +14,9 @@
 
 """Unit tests for widget template merge / settings isolation."""
 
+import asyncio
+from unittest.mock import AsyncMock, patch
+
 from app.tools.update_widget_settings import parse_settings_updates
 from app.tools.widget_template import (
     collect_template_widgets,
@@ -21,6 +24,7 @@ from app.tools.widget_template import (
     find_template_widget,
     index_widget_parents,
     pick_settings_highlights,
+    save_widget_template_patch,
     strip_properties_style,
 )
 
@@ -89,6 +93,8 @@ def test_collect_and_match_template_widgets() -> None:
     assert second is not None and second["uuid"] == "bbb"
     by_id = find_template_widget(template, widget_id="ccc")
     assert by_id is not None and by_id["widgetType"] == "html"
+    by_prefix = find_template_widget(template, widget_id="bbb")
+    assert by_prefix is not None and by_prefix["uuid"] == "bbb"
     parents = index_widget_parents(template["components"])
     assert parents["aaa"]["width"] == 12
     assert parents["aaa"]["row"] == 0
@@ -105,3 +111,78 @@ def test_pick_settings_highlights() -> None:
     highlights = pick_settings_highlights(widget)
     assert highlights["widgetClass"] == "grok-news"
     assert "settings.viewMode" in highlights
+
+
+TEMPLATE_ONLY_UUID = "031d03b3-aaaa-bbbb-cccc-ddddeeeeffff"
+
+
+def _template_only_content(count: int = 1) -> dict:
+    return {
+        "uid": "5686867710165115",
+        "version": 3,
+        "template": {
+            "components": [
+                {
+                    "type": "widget",
+                    "widgetType": "content-list",
+                    "uuid": TEMPLATE_ONLY_UUID,
+                    "properties": {"settings": {"count": count, "viewMode": "horizontal"}},
+                }
+            ]
+        },
+    }
+
+
+def test_find_template_only_widget_by_full_uuid_and_prefix() -> None:
+    template = _template_only_content()["template"]
+    full = find_template_widget(template, widget_id=TEMPLATE_ONLY_UUID)
+    assert full is not None and full["widgetType"] == "content-list"
+    prefix = find_template_widget(template, widget_id="031d03b3")
+    assert prefix is not None and prefix["uuid"] == TEMPLATE_ONLY_UUID
+
+
+def test_save_template_patch_gets_then_merges() -> None:
+    """Two writes must each GET current revision before content/save (CONTENT_NOT_UP_TO_DATE)."""
+    page = _template_only_content(count=1)
+
+    async def _get_content(content_id, token):
+        return page
+
+    with (
+        patch("app.tools.widget_template.lumapps_client.get_content", new_callable=AsyncMock) as get_content,
+        patch("app.tools.widget_template.lumapps_client.save_content", new_callable=AsyncMock) as save_content,
+        patch("app.tools.widget_template.lumapps_client.get_content_layout", new_callable=AsyncMock) as get_layout,
+    ):
+        get_content.side_effect = _get_content
+        save_content.return_value = {"ok": True}
+
+        ok1, _, target1 = asyncio.run(
+            save_widget_template_patch(
+                "5686867710165115",
+                TEMPLATE_ONLY_UUID,
+                {"properties": {"settings": {"count": 3}}},
+                "admin-tok",
+                layout=None,
+                protect_style=True,
+            )
+        )
+        ok2, _, target2 = asyncio.run(
+            save_widget_template_patch(
+                "5686867710165115",
+                "031d03b3",
+                {"properties": {"settings": {"itemsPerLine": 4}}},
+                "admin-tok",
+                layout=None,
+                protect_style=True,
+            )
+        )
+
+    assert ok1 and ok2
+    assert get_content.call_count == 2
+    get_layout.assert_not_called()
+    assert save_content.call_count == 2
+    first_saved = save_content.call_args_list[0].kwargs["data"]
+    assert first_saved["template"]["components"][0]["properties"]["settings"]["count"] == 3
+    assert target1["properties"]["settings"]["count"] == 3
+    assert target2["properties"]["settings"]["itemsPerLine"] == 4
+    assert target2["properties"]["settings"]["count"] == 3
