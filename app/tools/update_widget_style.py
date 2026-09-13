@@ -16,11 +16,17 @@
 
 import json
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
 from app.tools.api_error_utils import is_permission_denied, PERMISSION_DENIED_MESSAGE
+from app.tools.widget_template import (  # noqa: F401 — re-exports of former local helpers
+    deep_merge as _deep_merge,
+    collect_template_widgets as _collect_template_widgets,
+    layout_style_updates_to_template as _layout_style_updates_to_template,
+    save_widget_template_patch,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,49 +48,6 @@ TOOL_SCHEMA = {
 }
 
 
-def _deep_merge(base: Dict[str, Any], updates: Dict[str, Any]) -> None:
-    """Merge updates into base in place."""
-    for k, v in updates.items():
-        if k in base and isinstance(base[k], dict) and isinstance(v, dict):
-            _deep_merge(base[k], v)
-        else:
-            base[k] = v
-
-
-def _collect_template_widgets(components: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Collect all widgets from template.components in depth-first order (row → cells → components)."""
-    out: List[Dict[str, Any]] = []
-
-    def walk(items: List[Dict[str, Any]]) -> None:
-        for c in items or []:
-            if (c.get("type") or "").lower() == "widget":
-                out.append(c)
-            for key in ("cells", "components"):
-                walk(c.get(key) or [])
-
-    walk(components)
-    return out
-
-
-def _layout_style_updates_to_template(layout_style_updates: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Map layout-format style (body.style, style) to content.template widget format.
-    template uses properties.style.content (padding, margin) and properties.style.main (border, margin).
-    """
-    template_update: Dict[str, Any] = {}
-    body_style = (layout_style_updates.get("body") or {}).get("style")
-    top_style = layout_style_updates.get("style")
-    if body_style or top_style:
-        style: Dict[str, Any] = {}
-        if body_style:
-            style.setdefault("content", {}).update(body_style)
-        if top_style:
-            style.setdefault("main", {}).update(top_style)
-        if style:
-            template_update["properties"] = {"style": style}
-    return template_update
-
-
 async def _save_via_content(
     content_id: str,
     widget_id: str,
@@ -96,39 +59,11 @@ async def _save_via_content(
     Find widget in layout, match to content.template by type+index, apply style, save_content.
     Returns (success, message).
     """
-    widgets_layout = layout.get("widgets") or []
-    idx = None
-    w_type = None
-    for i, item in enumerate(widgets_layout):
-        w = item.get("widget") or item
-        if (w.get("widgetId") or w.get("id")) == widget_id:
-            idx = i
-            w_type = (w.get("widgetType") or w.get("body", {}).get("type") or "").strip()
-            break
-    if idx is None or not w_type:
-        return False, f"Widget {widget_id!r} not found in layout."
-
-    same_type_indices = [i for i, item in enumerate(widgets_layout) if (item.get("widget") or item).get("widgetType") == w_type]
-    try:
-        type_index = same_type_indices.index(idx)
-    except ValueError:
-        type_index = 0
-
-    content = await lumapps_client.get_content(content_id, token=token)
-    template = content.get("template") or {}
-    components = template.get("components") or []
-    template_widgets = _collect_template_widgets(components)
-    by_type = [tw for tw in template_widgets if (tw.get("widgetType") or "").strip() == w_type]
-    if type_index >= len(by_type):
-        return False, f"Widget type {w_type!r} at index {type_index} not found in content.template (found {len(by_type)})."
-
-    target = by_type[type_index]
     template_delta = _layout_style_updates_to_template(style_updates)
-    if template_delta:
-        _deep_merge(target, template_delta)
-
-    await lumapps_client.save_content(token=token, data=content, send_notifications=False)
-    return True, "Content saved."
+    ok, msg, _ = await save_widget_template_patch(
+        content_id, widget_id, template_delta, token, layout=layout
+    )
+    return ok, msg
 
 
 async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
