@@ -414,7 +414,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     if content_id:
         logger.info(f"Executing inspect_lumapps_element (layout) content_id={content_id!r}, user_email={user_email!r}")
         try:
-            token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
+            token = await lumapps_auth.get_inspect_token(user_email=user_email)
             layout = await lumapps_client.get_content_layout(content_id, token=token)
             content: Optional[Dict[str, Any]] = None
             try:
@@ -442,7 +442,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     if site_id:
         logger.info(f"Executing inspect_lumapps_element (style) site_id={site_id!r}, user_email={user_email!r}")
         try:
-            token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
+            token = await lumapps_auth.get_inspect_token(user_email=user_email)
             data = await lumapps_client.get_style_by_instance(site_id, token=token)
             style = data.get("style")
             if not style:

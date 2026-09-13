@@ -129,7 +129,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
 
     logger.info("Executing inspect_navigation site_id=%s lang=%s", site_id, lang)
     try:
-        token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
+        token = await lumapps_auth.get_inspect_token(user_email=user_email)
         menu = await lumapps_client.get_content_menu(site_id, token=token, lang=lang)
     except Exception as e:
         logger.exception("inspect_navigation content/menu/get failed")

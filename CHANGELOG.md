@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Email allowlist (fail closed)**: `MCP_ALLOWED_USER_EMAILS` is required for every LumApps `tools/call` (read and write). Empty or unset denies all API-key and impersonation tool calls. OIDC emails must also be on the list. Matching is case-insensitive. `initialize` / `tools/list` still work with a valid API key.
 - **No query-string API keys**: `?apiKey=` and `?token=` are rejected. Only `X-API-Key` or `Authorization: Bearer <MCP_API_KEY>` are accepted.
 
+### Changed
+
+- **Inspect uses read OAuth**: `inspect_lumapps_element` (layout and site theme) and `inspect_navigation` request LumApps `profile=read`. They no longer need `LUMAPPS_ADMIN_*` / `all.admin`. Write tools still use `profile=admin`.
+
 ### Security
 
 - Do not disable `RBAC_ENABLED`. `RBAC_DENY_API_KEY_FOR_NON_READ` remains independently configurable; the allowlist still applies to reads. `LUMAPPS_ACCESS_TOKEN` is not a production default. IP allowlisting is not implemented (Cursor/Grok Bot egress IPs are unpublished).

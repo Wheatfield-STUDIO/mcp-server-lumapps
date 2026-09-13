@@ -104,11 +104,11 @@ LumApps OAuth applications are created with a fixed scope: **all.read** (read-on
 
 | Purpose                   | Env vars                                                                                                   | LumApps scope | Tools                                                                                                             |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Read (end users)**      | `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`) | **all.read**  | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`                             |
-| **Admin (content + structural)** | `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`                                            | **all.admin** | `inspect_lumapps_element`, `update_widget_style`, `update_global_css`, `update_site_global_settings`                 |
+| **Read (end users + inspect)** | `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`) | **all.read**  | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`, `inspect_lumapps_element`, `inspect_navigation` |
+| **Admin (writes)**        | `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`                                            | **all.admin** | `update_widget_style`, `update_widget_settings`, `update_global_css`, `update_site_global_settings`, `update_site_theme`, `save_content_page`, `upsert_directory_entry`, `update_navigation_item` |
 
-- **Recommended setup**: Create **two OAuth applications** in LumApps for the same organization: one with **all.read** (for end-user search and inspection), one with **all.admin** (for CSS and widget updates). Set the read app in `LUMAPPS_READ_CLIENT_ID`/`LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`) and the admin app in `LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`. The server will use the read app for read tools and the admin app for modification tools; tokens are cached per user and per profile.
-- **Read-only deployment**: If you only set the read credentials, **inspect and modification tools will not work**. `inspect_lumapps_element`, `update_global_css`, `update_widget_style` and `update_site_global_settings` require the admin app; calling them without admin credentials will return a clear error.
+- **Recommended setup**: Create **two OAuth applications** in LumApps for the same organization: one with **all.read** (for search and inspect), one with **all.admin** (for writes). Set the read app in `LUMAPPS_READ_CLIENT_ID`/`LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`) and the admin app in `LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`. The server will use the read app for read/inspect tools and the admin app for modification tools; tokens are cached per user and per profile.
+- **Read-only deployment**: If you only set the read credentials, **inspect works** (`inspect_lumapps_element`, `inspect_navigation` use `profile=read`). Write tools still require the admin app; calling them without `LUMAPPS_ADMIN_*` returns a clear error.
 - **Single token (tests)**: If you set `LUMAPPS_ACCESS_TOKEN`, that token is used for both read and admin; no separate admin credentials are needed. The token must have the scope required by the tools you use (admin scope if you call modification tools).
 
 ---
@@ -183,13 +183,14 @@ Credentials stay inside your perimeter; use your existing secret management (e.g
 | `find_person`                 | Search people in the directory                                               | Read       | read                   |
 | `get_useful_links`            | Search useful links (Directory Entries: train, IT, training, etc.)           | Read       | read                   |
 | `search_site`                 | List or search LumApps sites (instances) for discovery and user confirmation | Read       | read                   |
-| `inspect_lumapps_element`     | Inspect page layout or site global CSS (API only); prepares edits           | **Content** | admin (canEdit/site admin)      |
+| `inspect_lumapps_element`     | Inspect page layout or site theme (API only); prepares edits                 | **Content** | read (all.read)       |
+| `inspect_navigation`          | Inspect the site navigation tree                                             | Structural | read (all.read)       |
 | `update_global_css`           | Update site global CSS                                                       | Structural | admin (all.admin)     |
 | `update_widget_style`         | Update a widget's style on a page                                            | Content    | admin + canEdit       |
 | `update_site_global_settings` | Update site footer HTML and/or head scripts                                  | Structural | admin                 |
 
 - **Level**: RBAC sensitivity. **Read** = any authenticated user. **Content** = Contributor or Admin on the page/site (inspect + widget style). **Structural** = Site Administrator only (global CSS, global settings).
-- **LumApps credentials**: **Read**-level tools use the **read** app. **Content** (`inspect_lumapps_element`, `update_widget_style`) and **Structural** tools use the **admin** app (`LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`) when configured. See [Read vs admin credentials](#read-vs-admin-credentials). When [user-level RBAC](#user-level-rbac) is enabled, API key alone cannot run Content or Structural tools.
+- **LumApps credentials**: **Read** and **inspect** tools (`inspect_lumapps_element`, `inspect_navigation`) use the **read** app (`all.read`). They do **not** need `LUMAPPS_ADMIN_*`. **Write** tools (Content and Structural updates) use the **admin** app when configured. See [Read vs admin credentials](#read-vs-admin-credentials). When [user-level RBAC](#user-level-rbac) is enabled, API key alone cannot run Content or Structural tools unless `RBAC_DENY_API_KEY_FOR_NON_READ=false`.
 
 ### Conduct rules for modification tools
 
