@@ -38,6 +38,8 @@ TOOL_SCHEMA = {
         "(style.properties palette/header/slideshow, instance.head, stylesheets). "
         "Use content_id + user_email for a page (layout v2 + content.template). "
         "Use site_id + user_email for the site theme. "
+        "Widget identities are returned in full (layout widgetId and template uuid) — never truncated. "
+        "Pass that complete widgetId to update_widget_settings / update_widget_style. "
         "Set full=true to return complete custom CSS (default false truncates at 8000 chars). "
         "No browser; works via API. Use the result to prepare a safe write "
         "(update_widget_settings, update_widget_style, update_site_theme, update_global_css). "
@@ -104,6 +106,53 @@ def _extract_footer(props: Dict[str, Any], settings: Any) -> Optional[Dict[str, 
     return None
 
 
+def _nonempty_id(value: Any) -> Optional[str]:
+    """Return a stripped ID string, or None. Never truncates."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _widget_identity_fields(node: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Collect full widgetId / uuid / id from a layout or template node."""
+    if not isinstance(node, dict):
+        return {}
+    out: Dict[str, str] = {}
+    widget_id = _nonempty_id(node.get("widgetId"))
+    uuid = _nonempty_id(node.get("uuid"))
+    extra = _nonempty_id(node.get("id"))
+    if widget_id:
+        out["widgetId"] = widget_id
+    if uuid:
+        out["uuid"] = uuid
+    if extra and extra not in out.values():
+        out["id"] = extra
+    return out
+
+
+def _format_widget_identity_label(
+    widget_id: str,
+    template_widget: Optional[Dict[str, Any]] = None,
+    raw: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Human/AI label with complete IDs (layout widgetId + template uuid)."""
+    parts: List[str] = []
+    layout_id = _nonempty_id(widget_id)
+    if layout_id and layout_id != "—":
+        parts.append(f"widgetId: {layout_id}")
+    ids = {**_widget_identity_fields(raw), **_widget_identity_fields(template_widget)}
+    uuid = ids.get("uuid")
+    if uuid:
+        parts.append(f"uuid: {uuid}")
+    extra = ids.get("id")
+    if extra and extra != layout_id and extra != uuid:
+        parts.append(f"id: {extra}")
+    if not parts:
+        parts.append("widgetId: —")
+    return ", ".join(parts)
+
+
 def _format_widget_entry(
     widget_id: str,
     w_type: str,
@@ -112,7 +161,7 @@ def _format_widget_entry(
     parent: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     """Format a widget from layout.widgets[] plus matched content.template node."""
-    lines = [f"  • {w_type!r} (id: {widget_id})"]
+    lines = [f"  • {w_type!r} ({_format_widget_identity_label(widget_id, template_widget, raw)})"]
     body = raw.get("body") or {}
     style = raw.get("style") or {}
     if body.get("text") is not None:
@@ -199,7 +248,7 @@ def _format_layout_response(
     lines.append("--- Widgets (type, id, settings, Advanced, style) ---")
     for item in widgets:
         w = item.get("widget") or item
-        w_id = w.get("widgetId") or w.get("id") or "—"
+        w_id = _nonempty_id(w.get("widgetId")) or _nonempty_id(w.get("id")) or "—"
         w_type = w.get("widgetType") or w.get("body", {}).get("type") or "—"
         template_widget = None
         if template:
@@ -223,8 +272,11 @@ def _summary_components(components: List[Dict], indent: int) -> str:
         t = c.get("type") or "?"
         if t == "widget":
             w_type = c.get("widgetType", "?")
-            w_id = (c.get("widgetId") or "")[:8]
-            out.append(f"{prefix}{t}({w_type}, id={w_id}...)")
+            ids = _widget_identity_fields(c)
+            id_bits = [f"{k}={v}" for k, v in ids.items()]
+            if not id_bits:
+                id_bits = ["widgetId=—"]
+            out.append(f"{prefix}{t}({w_type}, {', '.join(id_bits)})")
         elif t == "row":
             out.append(f"{prefix}row")
             for cell in c.get("cells") or []:

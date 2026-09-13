@@ -20,8 +20,10 @@ import pytest
 
 from app.tools.inspect_lumapps_element import (
     MAX_CSS_EXCERPT,
+    _format_layout_response,
     _format_style_response,
     _format_widget_entry,
+    _summary_components,
     find_slideshow_paths,
 )
 from app.tools.save_content_page import apply_featured_image
@@ -90,12 +92,17 @@ def test_find_slideshow_paths() -> None:
     assert any("slideshow" in p for p in paths)
 
 
+FULL_WIDGET_ID = "5299173474945511-content-list-0a1b2c3d4e5f6789"
+FULL_TEMPLATE_UUID = "0a1b2c3d-4e5f-6789-abcd-ef0123456789"
+
+
 def test_inspect_widget_and_full_css_flag() -> None:
     lines = _format_widget_entry(
         "wid-1",
         "content-list",
         {"body": {"text": "News"}},
         template_widget={
+            "uuid": FULL_TEMPLATE_UUID,
             "properties": {
                 "widgetClass": "image-arrondie, pilules-meta, newsbar",
                 "identifier": "news",
@@ -110,6 +117,8 @@ def test_inspect_widget_and_full_css_flag() -> None:
     assert "properties.settings" in blob
     assert "See all" in blob
     assert "width=12" in blob
+    assert FULL_TEMPLATE_UUID in blob
+    assert "uuid:" in blob
 
     long_css = "x" * (MAX_CSS_EXCERPT + 50)
     truncated = _format_style_response(
@@ -125,6 +134,78 @@ def test_inspect_widget_and_full_css_flag() -> None:
     assert "(truncated)" not in full
     assert "lumapps.customize" in full
     assert "slug: sandbox" in full
+
+
+def test_inspect_returns_full_widget_ids_not_truncated() -> None:
+    """update_widget_settings / update_widget_style need the complete widgetId and uuid."""
+    layout = {
+        "id": "lay-1",
+        "revisionNumber": 2,
+        "widgets": [
+            {
+                "widget": {
+                    "widgetId": FULL_WIDGET_ID,
+                    "widgetType": "content-list",
+                    "body": {"text": "News"},
+                }
+            },
+            {
+                "widget": {
+                    "widgetId": "dir-" + FULL_WIDGET_ID,
+                    "widgetType": "directory",
+                    "body": {},
+                }
+            },
+        ],
+        "components": [
+            {
+                "type": "row",
+                "cells": [
+                    {
+                        "type": "cell",
+                        "width": 12,
+                        "components": [
+                            {
+                                "type": "widget",
+                                "widgetType": "content-list",
+                                "widgetId": FULL_WIDGET_ID,
+                            },
+                            {
+                                "type": "widget",
+                                "widgetType": "directory",
+                                "widgetId": "dir-" + FULL_WIDGET_ID,
+                                "uuid": FULL_TEMPLATE_UUID,
+                            },
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    content = {
+        "uid": "page-1",
+        "type": "page",
+        "template": {
+            "components": [
+                {
+                    "type": "widget",
+                    "widgetType": "content-list",
+                    "uuid": FULL_TEMPLATE_UUID,
+                    "properties": {"settings": {"count": 3}},
+                }
+            ]
+        },
+    }
+    text = _format_layout_response(layout, content)
+    assert FULL_WIDGET_ID in text
+    assert "dir-" + FULL_WIDGET_ID in text
+    assert FULL_TEMPLATE_UUID in text
+    assert f"id={FULL_WIDGET_ID[:8]}..." not in text
+    tree = _summary_components(layout["components"], 0)
+    assert FULL_WIDGET_ID in tree
+    assert FULL_TEMPLATE_UUID in tree
+    assert "id=" + FULL_WIDGET_ID[:8] + "..." not in tree
+    assert "..." not in tree
 
 
 def test_featured_image_media_id_only() -> None:
