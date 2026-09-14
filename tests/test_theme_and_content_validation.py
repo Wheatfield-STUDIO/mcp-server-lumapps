@@ -203,11 +203,11 @@ def test_inspect_returns_full_widget_ids_not_truncated() -> None:
     }
     text = _format_layout_response(layout, content)
     assert FULL_WIDGET_ID in text
-    assert "dir-" + FULL_WIDGET_ID in text
     assert FULL_TEMPLATE_UUID in text
     assert f"id={FULL_WIDGET_ID[:8]}..." not in text
     tree = _summary_components(layout["components"], 0)
     assert FULL_WIDGET_ID in tree
+    assert "dir-" + FULL_WIDGET_ID in tree
     assert "id=" + FULL_WIDGET_ID[:8] + "..." not in tree
     assert "..." not in tree
     assert "use this id for writes: " + FULL_TEMPLATE_UUID in text
@@ -220,6 +220,7 @@ def test_inspect_returns_full_widget_ids_not_truncated() -> None:
     assert verbose.count("--- Structure") == 2
     assert "--- Structure (layout.components, full IDs) ---" in verbose
     assert "--- Structure (content.template.components, full IDs) ---" in verbose
+    assert "dir-" + FULL_WIDGET_ID in verbose
 
 
 def test_inspect_dumps_template_only_widget_settings() -> None:
