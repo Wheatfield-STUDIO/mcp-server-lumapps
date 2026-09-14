@@ -24,6 +24,7 @@ from app.services.html_parser import get_localized_value
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
 from app.tools.api_error_utils import format_api_error
+from app.tools.css_hooks import SKIN_BRIDGE_LEGEND, skin_bridge_line
 from app.tools.widget_template import (
     collect_template_widgets,
     find_template_widget,
@@ -45,11 +46,12 @@ TOOL_SCHEMA = {
         "POST v2/organizations/{org}/widgets/{widgetType}/blocks?siteId=&forceDisplay=true "
         "with body {ownerResourceInfo, widgetComponent}. "
         "The blocks response is a **JSON block tree** (widget.body.type like BlockTitle / BlockGrid, "
-        "widget.cssClass when present) — not DOM HTML. Do not invent .lumx-* selectors. "
-        "widget.cssClass is the live CSS skin (from properties.class, e.g. .grok-home-news). "
+        "widget.cssClass when present) — not DOM HTML. Do not invent .lumx-* selectors from it. "
+        "skin: .{cssClass} → .widget--{cssClass} (/blocks stays the token; CSS targets the prefix; "
+        "proven content-list / directory). Do not pick token vs prefixed at random. "
         "properties.widgetClass does not appear in /blocks — other/legacy, not the skin hook. "
-        "Use class names listed from (1) widget.cssClass, (2) class attributes in any HTML string "
-        "the API or stored html-widget content actually returned. Do not invent .widget--* or .lumx-*. "
+        "Use class names listed from (1) widget.cssClass + the skin bridge, (2) class attributes in any HTML string "
+        "the API or stored html-widget content actually returned, (3) inspect_front_html pasted DOM. "
         "html widget properties.content is stored HTML from content/get (HAR did not call /blocks for html). "
         "A row is composed by calling /blocks for each cell widget — there is no row endpoint in the HAR. "
         "There is no page-level HTML endpoint in the HAR. get_content_body is extracted article text, "
@@ -103,12 +105,7 @@ _OWNER_PROP_KEYS = (
     "externalKey",
 )
 
-CSS_HOOKS_LEGEND = (
-    "CSS skin = properties.class → /blocks widget.cssClass → .{token} "
-    "(e.g. grok-home-news → .grok-home-news). "
-    "properties.widgetClass (e.g. grok-news, grok-pills) does not appear in /blocks — "
-    "other/legacy, not the skin hook. Do not invent .widget--* or .lumx-*."
-)
+CSS_HOOKS_LEGEND = SKIN_BRIDGE_LEGEND
 _STORED_HTML_KEYS = ("content", "html", "text", "body")
 
 
@@ -410,8 +407,11 @@ def format_class_index(entries: List[Dict[str, Any]]) -> List[str]:
     for entry in entries:
         css = entry.get("cssClass")
         if isinstance(css, str) and css.strip() and css.strip() not in seen:
-            seen.add(css.strip())
-            lines.append(f"- .{css.strip()}  [widget.cssClass ← properties.class]")
+            token = css.strip()
+            seen.add(token)
+            lines.append(
+                f"- {skin_bridge_line(token)}  [widget.cssClass ← properties.class]"
+            )
             listed = True
         payload = entry.get("payloadClasses") or {}
         raw_wc = payload.get("widgetClass") if isinstance(payload, dict) else None
@@ -441,7 +441,7 @@ def format_class_index(entries: List[Dict[str, Any]]) -> List[str]:
     if not listed:
         lines.append(
             "- (none). /blocks returned a JSON block tree, not DOM HTML. "
-            "Live CSS skin is properties.class → widget.cssClass when present."
+            "When widget.cssClass is set: skin: .{cssClass} → .widget--{cssClass}."
         )
     return lines
 
@@ -464,6 +464,7 @@ def format_widget_render_entry(entry: Dict[str, Any]) -> List[str]:
         if css:
             note = f"  [CSS skin ← properties.class={klass!r}]" if klass else "  [CSS skin]"
             lines.append(f"widget.cssClass: {css}{note}")
+            lines.append(skin_bridge_line(str(css).strip()))
         else:
             lines.append("widget.cssClass: (absent)")
         blocks = entry.get("blocks")

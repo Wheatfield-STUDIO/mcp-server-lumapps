@@ -122,6 +122,7 @@ def test_inspect_widget_and_full_css_flag() -> None:
     assert FULL_TEMPLATE_UUID in blob
     assert "use this id for writes" in blob
     assert "rendered:" not in blob
+    assert "skin: .image-arrondie" not in blob
     assert "widget--" not in blob
     assert "live CSS: unknown" not in blob
     assert "properties.widgetClass: 'image-arrondie, pilules-meta, newsbar'" in blob
@@ -312,7 +313,9 @@ def test_inspect_dumps_template_only_widget_settings() -> None:
     assert "properties.class" in text
     assert "rendered: widget widget--grok-home-news" not in text
     assert "widget widget--" not in text
-    assert ".widget--grok" not in text
+    assert "skin: .grok-home-news → .widget--grok-home-news" in text
+    assert "skin: .grok-home-links → .widget--grok-home-links" in text
+    assert "live CSS: .widget--grok" not in text
     assert CSS_HOOKS_LEGEND in text
     assert "live CSS: unknown" not in text
     assert "properties.widgetClass: 'grok-news, grok-pills'" in text
@@ -397,7 +400,8 @@ def test_inspect_unique_widget_count_pairs_layout_and_template() -> None:
     assert "rendered: widget widget--grok-home-news" not in text
     assert "rendered: widget widget--grok-home-links" not in text
     assert "widget widget--" not in text
-    assert ".widget--grok" not in text
+    assert "skin: .grok-home-news → .widget--grok-home-news" in text
+    assert "skin: .grok-home-links → .widget--grok-home-links" in text
     assert CSS_HOOKS_LEGEND in text
     assert text.count("live CSS: unknown") == 0
     assert "live CSS: .widget--grok-home-news" not in text
@@ -425,8 +429,8 @@ def test_inspect_unique_widget_count_pairs_layout_and_template() -> None:
     assert "properties.style" in verbose
 
 
-def test_inspect_does_not_invent_widget_bem() -> None:
-    """Live hook is properties.class → cssClass → .token. No .widget--* line."""
+def test_inspect_skin_bridge_from_properties_class() -> None:
+    """Live hook: /blocks token + prefixed DOM class. Do not invent from widgetClass."""
     lines = _format_widget_entry(
         "w1",
         "content-list",
@@ -439,10 +443,12 @@ def test_inspect_does_not_invent_widget_bem() -> None:
     blob = "\n".join(lines)
     assert "properties.class: 'grok-home-news'" in blob
     assert "[CSS skin → /blocks cssClass]" in blob
+    assert "skin: .grok-home-news → .widget--grok-home-news" in blob
     assert "properties.widgetClass: 'grok-news, grok-pills'" in blob
     assert "[not in /blocks; other/legacy]" in blob
-    assert "widget--" not in blob
+    assert "skin: .grok-news" not in blob
     assert "rendered:" not in blob
+    assert "live CSS: .widget--grok-home-news" not in blob
     empty = _format_widget_entry("w2", "title", {}, template_widget={"uuid": "u2", "properties": {}})
     assert "properties.class" not in "\n".join(empty)
     assert "widget--" not in "\n".join(empty)
@@ -630,7 +636,9 @@ def test_inspect_bot_home_content_save_ground_truth() -> None:
     assert "rendered: widget widget--grok-home-news" not in text
     assert "rendered: widget widget--grok-home-links" not in text
     assert "widget widget--" not in text
-    assert ".widget--grok" not in text
+    assert "skin: .grok-home-news → .widget--grok-home-news" in text
+    assert "skin: .grok-home-links → .widget--grok-home-links" in text
+    assert "live CSS: .widget--grok" not in text
     assert CSS_HOOKS_LEGEND in text
     assert "live CSS: unknown" not in text
     assert "items[].order" in text

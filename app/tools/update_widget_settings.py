@@ -53,7 +53,9 @@ TOOL_SCHEMA = {
         "html: properties.content (locale map) + widgetClass, "
         "featured-image: properties.imageFormat + widgetClass. "
         "No footer link on that /bot save. "
-        "CSS skin is properties.class (feeds /blocks cssClass). "
+        "CSS skin: skin: .{cssClass} → .widget--{cssClass} "
+        "(properties.class / /blocks stays the token; CSS targets the prefix; proven content-list / directory). "
+        "Do not pick token vs prefixed at random. "
         "properties.widgetClass is not in /blocks — other/legacy, not the skin hook."
     ),
     "inputSchema": {

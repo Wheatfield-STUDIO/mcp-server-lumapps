@@ -19,6 +19,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.tools.api_error_utils import format_api_error
+from app.tools.css_hooks import SKIN_BRIDGE_LEGEND, skin_bridge_line
 from app.tools.widget_template import (
     index_widget_parents,
     normalize_widget_type,
@@ -43,11 +44,13 @@ TOOL_SCHEMA = {
         "Use site_id + user_email for the site theme. "
         "One line per widget. 'use this id for writes' is the content.template uuid "
         "(layoutId is also accepted via map). "
-        "CSS skin = properties.class (feeds /blocks widget.cssClass, selector .{class}). "
+        "CSS skin: skin: .{cssClass} → .widget--{cssClass} "
+        "(/blocks stays the token; CSS targets the prefixed class; proven content-list / directory). "
+        "Do not pick token vs prefixed at random. "
         "properties.widgetClass does not appear in /blocks — other/legacy, not the skin hook. "
         "inspect_widget_render is the source of truth for /blocks cssClass. "
         "For deep widget CSS (.lumx-*, inner title/span) use inspect_front_html with pasted outerHTML — "
-        "/blocks never has LumX DOM classes; do not invent them. "
+        "/blocks never has LumX DOM classes; do not invent .lumx-* from it. "
         "content-list dumps thumbnailPosition / uncompressedThumbnail (not 'cover'). "
         "settings.fields vs properties.fields[]: content/save persisted both (HAR req==resp). "
         "Inspect properties.settings plus sibling keys the BO saved (viewMode, perLine, …). "
@@ -103,12 +106,7 @@ _ADVANCED_FIELD_NOTES = {
     "classNames": "classNames",
 }
 
-CSS_HOOKS_LEGEND = (
-    "CSS skin = properties.class (feeds /blocks widget.cssClass, e.g. .grok-home-news). "
-    "properties.widgetClass (e.g. grok-news, grok-pills) does not appear in /blocks — "
-    "other/legacy, not the skin hook. inspect_widget_render is the source of truth. "
-    "Do not invent .widget--*."
-)
+CSS_HOOKS_LEGEND = SKIN_BRIDGE_LEGEND
 
 # Sibling keys observed on /bot content/save template widgets (HAR 2026-09-14).
 _SIBLING_KEYS = (
@@ -357,6 +355,9 @@ def _format_widget_entry(
             note = _ADVANCED_FIELD_NOTES.get(key, "")
             suffix = f"  [{note}]" if note else ""
             lines.append(f"      properties.{key}: {props.get(key)!r}{suffix}")
+            if key == "class" and isinstance(props.get("class"), str) and props["class"].strip():
+                token = props["class"].strip().split()[0]
+                lines.append(f"      {skin_bridge_line(token)}")
 
     lines.extend(_fields_honor_lines(w_type, props, settings))
     lines.extend(_visual_lines(w_type, props, settings))

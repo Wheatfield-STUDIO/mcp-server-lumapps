@@ -346,11 +346,11 @@ def test_class_index_lists_cssclass_and_html_only() -> None:
         {"cssClass": None, "html": []},
     ]
     blob = "\n".join(format_class_index(entries))
-    assert ".grok-home-news  [widget.cssClass ← properties.class]" in blob
+    assert "skin: .grok-home-news → .widget--grok-home-news  [widget.cssClass ← properties.class]" in blob
     assert ".lumx-typography-body1  [HTML class in properties.content]" in blob
     assert ".title  [HTML class in properties.content]" in blob
     assert "widget widget--" not in blob
-    assert ".widget--" not in blob
+    assert "live CSS: .widget--" not in blob
     assert "widgetClass tokens not in /blocks" in blob
     assert ".grok-news" in blob
     assert ".grok-pills" in blob
@@ -359,7 +359,7 @@ def test_class_index_lists_cssclass_and_html_only() -> None:
 def test_class_index_empty_when_blocks_have_no_html() -> None:
     blob = "\n".join(format_class_index([{"cssClass": None, "html": []}]))
     assert "none" in blob
-    assert "Live CSS skin is properties.class" in blob
+    assert "skin: .{cssClass} → .widget--{cssClass}" in blob
 
 
 def test_fields_vs_order_flags_excerpt_still_rendered() -> None:
@@ -438,7 +438,8 @@ def test_handle_one_widget_posts_har_payload() -> None:
     assert "BlockGrid" in text
     assert "settings.fields did not win / still rendered" in text
     assert "widget widget--" not in text
-    assert ".widget--grok" not in text
+    assert "skin: .grok-home-news → .widget--grok-home-news" in text
+    assert "live CSS: .widget--grok" not in text
 
 
 def test_handle_row_composes_cell_widgets() -> None:
