@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.tools.api_error_utils import format_api_error
 from app.tools.widget_template import (
     index_widget_parents,
+    normalize_widget_type,
     pair_layout_and_template,
     widget_identity_ids,
     widget_type_of,
@@ -42,10 +43,14 @@ TOOL_SCHEMA = {
         "Use site_id + user_email for the site theme. "
         "One line per widget. 'use this id for writes' is the content.template uuid "
         "(layoutId is also accepted via map). "
-        "live CSS is .widget--{properties.class} (LumApps BEM on .widget; see lumapps-css-variables). "
-        "properties.widgetClass is extra classes, not the widget-- hook. "
-        "cover / thumbnail-in-background / footer link are always printed (or 'unset'). "
-        "Set full=true for complete custom CSS. Set verbose=true for both component trees. "
+        "live CSS is unknown: repo resources do not map Advanced 'Widget classes' to "
+        "properties.class vs properties.widgetClass, nor to .widget-- "
+        "(lumapps-css-variables only documents product BEM .widget--has-ungrouped-container-block). "
+        "cover / thumbnail-in-background / footer link only on content-list (or unset); "
+        "footer link also on directory when that field exists. "
+        "Empty properties.style is omitted unless verbose=true. "
+        "Set full=true for complete custom CSS. Set verbose=true for both component trees "
+        "and empty style dumps. "
         "No browser; works via API. Use the result to prepare a safe write "
         "(update_widget_settings, update_widget_style, update_site_theme, update_global_css). "
         "This tool is read-only: no Yes/Confirm is required."
@@ -71,7 +76,7 @@ TOOL_SCHEMA = {
             },
             "verbose": {
                 "type": "boolean",
-                "description": "If true, print both layout.components and content.template.components trees. Default: one tree (template if present, else layout).",
+                "description": "If true, print both layout.components and content.template.components trees, and dump empty properties.style. Default: one tree (template if present, else layout); skip empty style.",
             },
         },
         "required": [],
@@ -82,8 +87,8 @@ MAX_CSS_EXCERPT = 8000
 
 _ADVANCED_CLASS_KEYS = ("class", "widgetClass", "identifier", "classes", "classNames")
 _ADVANCED_FIELD_NOTES = {
-    "class": "Advanced class → live CSS .widget--{value}",
-    "widgetClass": "extra classes (e.g. grok-news, grok-pills) — not the .widget-- hook",
+    "class": "payload field; Advanced UI mapping unknown — not proven as .widget-- hook",
+    "widgetClass": "this server treats as Advanced classes; UI \"Widget classes\" mapping unconfirmed",
     "identifier": "Advanced identifier",
     "classes": "extra classes",
     "classNames": "classNames",
@@ -149,30 +154,65 @@ def _thumbnail_in_background_value(props: Dict[str, Any], settings: Any) -> Any:
     return None
 
 
-def _widget_live_css(props: Dict[str, Any]) -> str:
-    """
-    Live selector the LumApps front applies on the widget root.
-    Repo resource lumapps-css-variables.md uses BEM .widget--* on .widget.
-    The Advanced field stored as properties.class is that modifier (e.g. grok-home-news → .widget--grok-home-news).
-    properties.widgetClass is a separate extra-class list and is not prefixed.
-    """
-    raw = props.get("class") if isinstance(props, dict) else None
-    if raw is None or (isinstance(raw, str) and not str(raw).strip()):
-        return "live CSS: unset (no properties.class → no .widget-- hook)"
-    token = str(raw).strip().replace(",", " ").split()[0]
-    if not token:
-        return "live CSS: unset (no properties.class → no .widget-- hook)"
-    return f"live CSS: .widget--{token}"
+def _nonempty_class_token(value: Any) -> Optional[str]:
+    if value is None or (isinstance(value, str) and not str(value).strip()):
+        return None
+    return str(value).strip()
 
 
-def _visual_always_lines(props: Dict[str, Any], settings: Any) -> List[str]:
-    """Always print cover / thumbnail-in-background / footer link (or unset)."""
+def _widget_live_css(props: Dict[str, Any]) -> Optional[str]:
+    """
+    Do not invent a .widget-- hook. Repo evidence:
+    - lumapps-css-variables.md only shows product BEM .widget--has-ungrouped-container-block
+    - lumapps-customizations-api.md targets widgets as widget-<id> or widget-<identifier>
+    - this server historically listed properties.widgetClass as Advanced classes
+    - /bot payloads also have properties.class
+    Advanced tab "Widget classes" → which field, and whether the front prefixes .widget--,
+    is not documented. Say unknown.
+    """
+    props = props if isinstance(props, dict) else {}
+    klass = _nonempty_class_token(props.get("class"))
+    wclass = _nonempty_class_token(props.get("widgetClass"))
+    if not klass and not wclass:
+        return None
+    bits = []
+    if klass:
+        bits.append(f"class={klass}")
+    if wclass:
+        bits.append(f"widgetClass={wclass}")
+    return (
+        "live CSS: unknown — Advanced \"Widget classes\" → class vs widgetClass "
+        "is not in repo resources; .widget-- is only documented as product BEM "
+        f"(.widget--has-ungrouped-container-block). {'; '.join(bits)} "
+        "— do not assume .widget--{class} or .widget--{widgetClass}"
+    )
+
+
+def _is_empty_style(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    if isinstance(value, dict):
+        return all(_is_empty_style(v) for v in value.values()) if value else True
+    if isinstance(value, list):
+        return all(_is_empty_style(v) for v in value) if value else True
+    return False
+
+
+def _visual_lines(w_type: str, props: Dict[str, Any], settings: Any) -> List[str]:
+    """Cover / thumbnail / footer only on content-list. Footer also on directory when present."""
+    nt = normalize_widget_type(w_type)
     footer = _extract_footer(props, settings)
-    return [
-        f"      cover: {_fmt_or_unset(_cover_value(props, settings))}",
-        f"      thumbnail-in-background: {_fmt_or_unset(_thumbnail_in_background_value(props, settings))}",
-        f"      footer link: {_fmt_or_unset(footer)}",
-    ]
+    if nt == "content-list":
+        return [
+            f"      cover: {_fmt_or_unset(_cover_value(props, settings))}",
+            f"      thumbnail-in-background: {_fmt_or_unset(_thumbnail_in_background_value(props, settings))}",
+            f"      footer link: {_fmt_or_unset(footer)}",
+        ]
+    if "directory" in nt and footer is not None:
+        return [f"      footer link: {_fmt_or_unset(footer)}"]
+    return []
 
 
 def _extract_footer(props: Dict[str, Any], settings: Any) -> Optional[Dict[str, Any]]:
@@ -246,6 +286,8 @@ def _format_widget_entry(
     raw: Dict[str, Any],
     template_widget: Optional[Dict[str, Any]] = None,
     parent: Optional[Dict[str, Any]] = None,
+    *,
+    verbose: bool = False,
 ) -> List[str]:
     """Format a widget from layout.widgets[] plus matched content.template node."""
     lines = [f"  • {w_type!r} ({_format_widget_identity_label(widget_id, template_widget, raw)})"]
@@ -269,8 +311,9 @@ def _format_widget_entry(
     elif isinstance(raw.get("properties"), dict):
         props = raw["properties"]
 
-    if props.get("style") is not None:
-        lines.append(f"      properties.style: {json.dumps(props.get('style'))}")
+    prop_style = props.get("style")
+    if prop_style is not None and (verbose or not _is_empty_style(prop_style)):
+        lines.append(f"      properties.style: {json.dumps(prop_style)}")
 
     settings = props.get("settings")
     if settings is not None:
@@ -282,8 +325,10 @@ def _format_widget_entry(
             suffix = f"  [{note}]" if note else ""
             lines.append(f"      properties.{key}: {props.get(key)!r}{suffix}")
 
-    lines.append(f"      {_widget_live_css(props)}")
-    lines.extend(_visual_always_lines(props, settings))
+    live_css = _widget_live_css(props)
+    if live_css:
+        lines.append(f"      {live_css}")
+    lines.extend(_visual_lines(w_type, props, settings))
 
     w_type_norm = (w_type or "").strip().lower()
     if "directory" in w_type_norm:
@@ -294,9 +339,16 @@ def _format_widget_entry(
             lines.append("      linked directory id: unset")
 
     if parent:
-        lines.append(
-            f"      parent: row={parent.get('row')} cell={parent.get('cell')} width={parent.get('width')}"
-        )
+        bits = [
+            f"row={parent.get('row')}",
+            f"cell={parent.get('cell')}",
+            f"width={parent.get('width')}",
+        ]
+        if parent.get("rowId"):
+            bits.append(f"rowId={parent['rowId']}")
+        if parent.get("cellId"):
+            bits.append(f"cellId={parent['cellId']}")
+        lines.append(f"      parent: {' '.join(bits)}")
     return lines
 
 
@@ -361,7 +413,9 @@ def _format_layout_response(
         w_id = write_id or (ids[0] if ids else "—")
         w_type = widget_type_of(node) or "—"
         parent = _parent_for_widget(w_id, parents, template_widget, raw)
-        lines.extend(_format_widget_entry(w_id, w_type, raw or {}, template_widget, parent))
+        lines.extend(
+            _format_widget_entry(w_id, w_type, raw or {}, template_widget, parent, verbose=verbose)
+        )
         lines.append("")
 
     layout_components = layout.get("components") or []

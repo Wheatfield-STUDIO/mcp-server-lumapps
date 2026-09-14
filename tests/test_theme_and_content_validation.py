@@ -23,10 +23,12 @@ from app.tools.inspect_lumapps_element import (
     _format_layout_response,
     _format_style_response,
     _format_widget_entry,
+    _is_empty_style,
     _summary_components,
     _widget_live_css,
     find_slideshow_paths,
 )
+from app.tools.widget_template import index_widget_parents
 from app.tools.save_content_page import apply_featured_image
 from app.tools.update_navigation_item import apply_menu_patch, find_item
 from app.tools.update_site_theme import apply_header, apply_palette, apply_slideshow
@@ -120,7 +122,8 @@ def test_inspect_widget_and_full_css_flag() -> None:
     assert "width=12" in blob
     assert FULL_TEMPLATE_UUID in blob
     assert "use this id for writes" in blob
-    assert "live CSS: unset" in blob
+    assert "live CSS: unknown" in blob
+    assert "widgetClass=image-arrondie, pilules-meta, newsbar" in blob
     assert "live CSS: .widget--image-arrondie" not in blob
     assert "cover: unset" in blob
     assert "thumbnail-in-background: unset" in blob
@@ -253,6 +256,7 @@ def test_inspect_dumps_template_only_widget_settings() -> None:
                                     "properties": {
                                         "class": "grok-home-news",
                                         "widgetClass": "image-arrondie, pilules-meta",
+                                        "style": {"content": {}, "main": {}},
                                         "identifier": "home-news",
                                         "settings": {
                                             "viewMode": "horizontal",
@@ -296,16 +300,21 @@ def test_inspect_dumps_template_only_widget_settings() -> None:
     assert "content.template.components" in text
     assert "use this id for writes" in text
     assert "properties.class" in text
-    assert "live CSS: .widget--grok-home-news" in text
-    assert "live CSS: .widget--image-arrondie" not in text
+    assert "live CSS: unknown" in text
+    assert "class=grok-home-news" in text
+    assert "widgetClass=image-arrondie, pilules-meta" in text
+    assert "live CSS: .widget--grok-home-news" not in text
     assert "properties.widgetClass" in text
     assert 'cover: "media-cover-1"' in text
     assert 'thumbnail-in-background: "#f0f1f5"' in text
-    assert text.count("cover: unset") >= 1
-    assert text.count("thumbnail-in-background: unset") >= 1
-    assert text.count("footer link: unset") >= 1
+    assert "footer link: unset" in text
+    title_and_dir_have_no_cover = text.count("cover:") == 1
+    assert title_and_dir_have_no_cover
+    assert "cover: unset" not in text
+    assert text.count("thumbnail-in-background:") == 1
     assert "not writable alone" not in text
     assert text.count("--- Structure") == 1
+    assert "properties.style" not in text
 
 
 def test_inspect_unique_widget_count_pairs_layout_and_template() -> None:
@@ -323,7 +332,12 @@ def test_inspect_unique_widget_count_pairs_layout_and_template() -> None:
     content = {
         "template": {
             "components": [
-                {"type": "widget", "widgetType": "title", "uuid": "t-title", "properties": {}},
+                {
+                    "type": "widget",
+                    "widgetType": "title",
+                    "uuid": "t-title",
+                    "properties": {"style": {"content": {}, "main": {}, "header": {}, "footer": {}}},
+                },
                 {"type": "widget", "widgetType": "html", "uuid": "t-html", "properties": {}},
                 {"type": "widget", "widgetType": "featured-image", "uuid": "t-hero", "properties": {}},
                 {
@@ -336,7 +350,12 @@ def test_inspect_unique_widget_count_pairs_layout_and_template() -> None:
                     "type": "widget",
                     "widgetType": "directory-entry",
                     "uuid": "cb986a70-aaaa-bbbb-cccc-ddddeeeeffff",
-                    "properties": {"settings": {"directory": "8821612211991448"}},
+                    "properties": {
+                        "settings": {
+                            "directory": "8821612211991448",
+                            "footer": {"label": "All people", "href": "/dir"},
+                        }
+                    },
                 },
             ]
         }
@@ -349,25 +368,107 @@ def test_inspect_unique_widget_count_pairs_layout_and_template() -> None:
     assert "use this id for writes: cb986a70-aaaa-bbbb-cccc-ddddeeeeffff" in text
     assert "layoutId: 42d2a09e-1111-2222-3333-444455556666 (also accepted via map)" in text
     assert "not writable alone" not in text
-    assert "live CSS: .widget--grok-home-news" in text
-    assert text.count("cover: unset") == 5
-    assert text.count("thumbnail-in-background: unset") == 5
-    assert text.count("footer link: unset") == 5
+    assert "live CSS: unknown" in text
+    assert "class=grok-home-news" in text
+    assert "live CSS: .widget--grok-home-news" not in text
+    assert text.count("cover:") == 1
+    assert text.count("cover: unset") == 1
+    assert text.count("thumbnail-in-background: unset") == 1
+    assert text.count("footer link: unset") == 1
+    assert "All people" in text
+    assert "properties.style" not in text
+    title_block = text.split("  • 'html'")[0]
+    assert "cover:" not in title_block
+    html_block = text.split("  • 'html'")[1].split("  • ")[0]
+    assert "cover:" not in html_block
+    assert "thumbnail-in-background:" not in html_block
+    assert "footer link:" not in html_block
+    hero_block = text.split("  • 'featured-image'")[1].split("  • ")[0]
+    assert "cover:" not in hero_block
+    dir_block = text.split("  • 'directory-entry'")[1]
+    assert "cover:" not in dir_block
+    assert "footer link:" in dir_block
     assert text.count("--- Structure") == 1
     assert "content.template.components" in text
     assert "--- Structure (layout.components, full IDs) ---" not in text
     assert "8821612211991448" in text
+    verbose = _format_layout_response(layout, content, verbose=True)
+    assert "properties.style" in verbose
 
 
-def test_inspect_live_css_uses_properties_class_not_widget_class() -> None:
-    """LumApps BEM hook is .widget--{properties.class}, not widgetClass."""
-    assert _widget_live_css({"class": "grok-home-news", "widgetClass": "grok-news, grok-pills"}) == (
-        "live CSS: .widget--grok-home-news"
+def test_inspect_live_css_unknown_without_inventing_widget_prefix() -> None:
+    """Repo does not map Advanced Widget classes to .widget--{class} or widgetClass."""
+    both = _widget_live_css({"class": "grok-home-news", "widgetClass": "grok-news, grok-pills"})
+    assert both is not None
+    assert both.startswith("live CSS: unknown")
+    assert "class=grok-home-news" in both
+    assert "widgetClass=grok-news, grok-pills" in both
+    assert ".widget--grok-home-news" not in both
+    assert ".widget--grok-news" not in both
+    only_widget = _widget_live_css({"widgetClass": "grok-news, grok-pills"})
+    assert only_widget is not None and only_widget.startswith("live CSS: unknown")
+    assert "widgetClass=grok-news, grok-pills" in only_widget
+    assert _widget_live_css({}) is None
+    assert _widget_live_css({"identifier": "home-news"}) is None
+
+
+def test_inspect_skips_empty_properties_style_unless_verbose() -> None:
+    empty = {"content": {}, "main": {}, "header": {}, "footer": {}}
+    assert _is_empty_style(empty)
+    assert not _is_empty_style({"content": {"paddingTop": "8px"}})
+    hidden = _format_widget_entry(
+        "w1",
+        "title",
+        {},
+        template_widget={"uuid": "t-style", "properties": {"style": empty}},
     )
-    assert _widget_live_css({"widgetClass": "grok-news, grok-pills"}) == (
-        "live CSS: unset (no properties.class → no .widget-- hook)"
+    assert "properties.style" not in "\n".join(hidden)
+    shown_empty = _format_widget_entry(
+        "w1",
+        "title",
+        {},
+        template_widget={"uuid": "t-style", "properties": {"style": empty}},
+        verbose=True,
     )
-    assert _widget_live_css({}) == "live CSS: unset (no properties.class → no .widget-- hook)"
+    assert "properties.style" in "\n".join(shown_empty)
+    shown_real = _format_widget_entry(
+        "w1",
+        "title",
+        {},
+        template_widget={"uuid": "t-style", "properties": {"style": {"content": {"paddingTop": "8px"}}}},
+    )
+    assert "paddingTop" in "\n".join(shown_real)
+
+
+def test_inspect_parent_prints_real_row_cell_id_when_present() -> None:
+    components = [
+        {
+            "type": "row",
+            "uuid": "row-real-id",
+            "cells": [
+                {
+                    "type": "cell",
+                    "id": "cell-real-id",
+                    "width": 12,
+                    "components": [{"type": "widget", "widgetType": "title", "uuid": "t-title"}],
+                }
+            ],
+        }
+    ]
+    parents = index_widget_parents(components)
+    assert parents["t-title"]["row"] == 0
+    assert parents["t-title"]["rowId"] == "row-real-id"
+    assert parents["t-title"]["cellId"] == "cell-real-id"
+    lines = _format_widget_entry(
+        "t-title",
+        "title",
+        {},
+        template_widget={"uuid": "t-title"},
+        parent=parents["t-title"],
+    )
+    blob = "\n".join(lines)
+    assert "rowId=row-real-id" in blob
+    assert "cellId=cell-real-id" in blob
 
 
 def test_featured_image_media_id_only() -> None:

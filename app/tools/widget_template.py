@@ -210,8 +210,19 @@ def collect_template_widgets(components: List[Dict[str, Any]]) -> List[Dict[str,
     return out
 
 
+def _real_node_id(node: Optional[Dict[str, Any]]) -> Optional[str]:
+    """uuid/id already on a row or cell. Never invents an index as an id."""
+    if not isinstance(node, dict):
+        return None
+    for key in ("uuid", "id"):
+        val = node.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
 def index_widget_parents(components: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Map widgetId/uuid → parent row/cell index and 12-col width."""
+    """Map widgetId/uuid → parent row/cell index, 12-col width, and real row/cell id if present."""
     parents: Dict[str, Dict[str, Any]] = {}
     row_counter = 0
 
@@ -220,6 +231,8 @@ def index_widget_parents(components: List[Dict[str, Any]]) -> Dict[str, Dict[str
         row_idx: Optional[int],
         cell_idx: Optional[int],
         width: Any,
+        row_id: Optional[str] = None,
+        cell_id: Optional[str] = None,
     ) -> None:
         nonlocal row_counter
         for c in items or []:
@@ -227,20 +240,26 @@ def index_widget_parents(components: List[Dict[str, Any]]) -> Dict[str, Dict[str
             if t == "row":
                 r = row_counter
                 row_counter += 1
+                rid = _real_node_id(c)
                 for i, cell in enumerate(c.get("cells") or []):
-                    walk(cell.get("components") or [], r, i, cell.get("width"))
-                walk(c.get("components") or [], r, cell_idx, width)
+                    walk(cell.get("components") or [], r, i, cell.get("width"), rid, _real_node_id(cell))
+                walk(c.get("components") or [], r, cell_idx, width, rid, cell_id)
             elif t == "cell":
-                walk(c.get("components") or [], row_idx, cell_idx, c.get("width"))
+                walk(c.get("components") or [], row_idx, cell_idx, c.get("width"), row_id, _real_node_id(c))
             elif t == "widget":
+                rec: Dict[str, Any] = {"row": row_idx, "cell": cell_idx, "width": width}
+                if row_id:
+                    rec["rowId"] = row_id
+                if cell_id:
+                    rec["cellId"] = cell_id
                 for key in ("widgetId", "id", "uuid"):
                     wid = c.get(key)
                     if isinstance(wid, str) and wid.strip():
-                        parents[wid] = {"row": row_idx, "cell": cell_idx, "width": width}
+                        parents[wid] = rec
             else:
-                walk(c.get("components") or [], row_idx, cell_idx, width)
+                walk(c.get("components") or [], row_idx, cell_idx, width, row_id, cell_id)
                 for i, cell in enumerate(c.get("cells") or []):
-                    walk(cell.get("components") or [], row_idx, i, cell.get("width"))
+                    walk(cell.get("components") or [], row_idx, i, cell.get("width"), row_id, _real_node_id(cell))
 
     walk(components, None, None, None)
     return parents
