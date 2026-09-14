@@ -44,6 +44,7 @@ CONTENT_TOOLS: Set[str] = {
     "update_widget_settings",
     "inspect_lumapps_element",
     "inspect_widget_render",
+    "inspect_front_html",
     "save_content_page",
     "upsert_directory_entry",
 }
@@ -64,6 +65,7 @@ _CONTENT_ID_SITE_TOOLS: Set[str] = {
     "update_widget_settings",
     "inspect_lumapps_element",
     "inspect_widget_render",
+    "inspect_front_html",
     "save_content_page",
 }
 # Tools that resolve directory_id → site_id when site_id is omitted.

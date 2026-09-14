@@ -45,7 +45,9 @@ TOOL_SCHEMA = {
         "(layoutId is also accepted via map). "
         "CSS skin = properties.class (feeds /blocks widget.cssClass, selector .{class}). "
         "properties.widgetClass does not appear in /blocks — other/legacy, not the skin hook. "
-        "Say that once; do not invent .widget--*. inspect_widget_render is the source of truth. "
+        "inspect_widget_render is the source of truth for /blocks cssClass. "
+        "For deep widget CSS (.lumx-*, inner title/span) use inspect_front_html with pasted outerHTML — "
+        "/blocks never has LumX DOM classes; do not invent them. "
         "content-list dumps thumbnailPosition / uncompressedThumbnail (not 'cover'). "
         "settings.fields vs properties.fields[]: content/save persisted both (HAR req==resp). "
         "Inspect properties.settings plus sibling keys the BO saved (viewMode, perLine, …). "
@@ -58,7 +60,8 @@ TOOL_SCHEMA = {
         "and empty style dumps. "
         "No browser; works via API. Use the result to prepare a safe write "
         "(update_widget_settings, update_widget_style, update_site_theme, update_global_css). "
-        "For widget CSS: inspect_lumapps_element, then inspect_widget_render, then update_global_css. "
+        "For widget CSS: inspect_lumapps_element, then inspect_widget_render, then inspect_front_html "
+        "(pasted outerHTML for .lumx-*), then update_global_css. "
         "This tool is read-only: no Yes/Confirm is required."
     ),
     "inputSchema": {

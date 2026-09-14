@@ -32,6 +32,7 @@ from app.tools import (
     get_useful_links,
     inspect_lumapps_element,
     inspect_widget_render,
+    inspect_front_html,
     update_global_css,
     update_site_global_settings,
     update_widget_style,
@@ -69,6 +70,7 @@ def _build_registry() -> None:
     _register(get_useful_links.TOOL_SCHEMA, get_useful_links.handle)
     _register(inspect_lumapps_element.TOOL_SCHEMA, inspect_lumapps_element.handle)
     _register(inspect_widget_render.TOOL_SCHEMA, inspect_widget_render.handle)
+    _register(inspect_front_html.TOOL_SCHEMA, inspect_front_html.handle)
     _register(update_global_css.TOOL_SCHEMA, update_global_css.handle)
     _register(update_site_global_settings.TOOL_SCHEMA, update_site_global_settings.handle)
     _register(update_widget_style.TOOL_SCHEMA, update_widget_style.handle)
