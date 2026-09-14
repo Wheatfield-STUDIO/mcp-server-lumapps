@@ -15,8 +15,8 @@
 from dataclasses import dataclass
 from typing import Optional
 
-from fastapi import Security, HTTPException, status
-from fastapi.security.api_key import APIKeyHeader, APIKeyQuery
+from fastapi import Request, Security, HTTPException, status
+from fastapi.security.api_key import APIKeyHeader
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import settings
@@ -24,9 +24,12 @@ from app.core.oidc import validate_oidc_token
 from app.core.user_context import UserContext, set_user_context
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-api_key_query = APIKeyQuery(name="apiKey", auto_error=False)
-api_key_query_token = APIKeyQuery(name="token", auto_error=False)
 http_bearer = HTTPBearer(auto_error=False)
+
+_QUERY_KEY_REJECTED = (
+    "API keys in the query string are not allowed. "
+    "Use the X-API-Key header or Authorization: Bearer."
+)
 
 
 @dataclass
@@ -35,6 +38,16 @@ class AuthResult:
 
     api_key: Optional[str] = None
     user_context: Optional[UserContext] = None
+
+
+def reject_query_string_api_keys(request: Request) -> None:
+    """Reject ?apiKey= and ?token= (any case) so keys are not stored in URLs or access logs."""
+    names = {key.lower() for key in request.query_params.keys()}
+    if "apikey" in names or "token" in names:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=_QUERY_KEY_REJECTED,
+        )
 
 
 async def validate_api_key(api_key: str = Security(api_key_header)):
@@ -57,36 +70,37 @@ def _get_bearer_key(credentials: Optional[HTTPAuthorizationCredentials]) -> Opti
     return None
 
 
-def _try_api_key(
-    api_key_header_val: str,
-    api_key_query_val: str,
-    token_query_val: str,
-) -> Optional[str]:
-    raw = api_key_header_val or api_key_query_val or token_query_val
-    if not raw or not settings.MCP_API_KEY or raw != settings.MCP_API_KEY:
+def _header_api_key(api_key_header_val: Optional[str]) -> Optional[str]:
+    if not api_key_header_val or not settings.MCP_API_KEY:
         return None
-    return raw
+    if api_key_header_val != settings.MCP_API_KEY:
+        return None
+    return api_key_header_val
 
 
 async def validate_api_key_header_or_query(
+    request: Request,
     api_key_header_val: str = Security(api_key_header),
-    api_key_query_val: str = Security(api_key_query),
-    token_query_val: str = Security(api_key_query_token),
     bearer: Optional[HTTPAuthorizationCredentials] = Security(http_bearer),
 ) -> AuthResult:
     """
     Dual-mode auth: OIDC preferred (Bearer JWT), API key fallback when allowed.
+    API key is accepted only from X-API-Key or Authorization: Bearer (not query string).
     Sets request-scoped user context when OIDC succeeds.
     """
+    reject_query_string_api_keys(request)
+
     bearer_key = _get_bearer_key(bearer)
     allow_fallback = settings.AUTH_ALLOW_API_KEY_FALLBACK and settings.MCP_API_KEY
 
     if settings.AUTH_MODE == "api_key_only":
-        api_key = api_key_header_val or api_key_query_val or token_query_val or bearer_key
+        api_key = api_key_header_val or (
+            bearer_key if (settings.MCP_API_KEY and bearer_key == settings.MCP_API_KEY) else None
+        )
         if not api_key:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Missing API Key (use X-API-Key, Authorization: Bearer, or ?apiKey= or ?token=)",
+                detail="Missing API Key (use X-API-Key or Authorization: Bearer)",
             )
         if api_key != settings.MCP_API_KEY:
             raise HTTPException(
@@ -103,9 +117,9 @@ async def validate_api_key_header_or_query(
             set_user_context(user_ctx)
             return AuthResult(api_key=None, user_context=user_ctx)
 
-    # Fallback: API key from header, query, or Bearer
+    # Fallback: API key from X-API-Key or Bearer only
     if allow_fallback:
-        api_key = _try_api_key(api_key_header_val, api_key_query_val, token_query_val)
+        api_key = _header_api_key(api_key_header_val)
         if not api_key and bearer_key:
             api_key = bearer_key if (settings.MCP_API_KEY and bearer_key == settings.MCP_API_KEY) else None
         if api_key:

@@ -17,7 +17,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from app.core.config import settings
 from app.services.lumapps_auth import lumapps_auth
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -166,10 +166,12 @@ class LumAppsClient:
         lang: str = None,
         order_by: str = "publicationDate",
         order_direction: str = "desc",
+        content_type: str = None,
     ) -> List[Dict[str, Any]]:
         """
         List content (e.g. news) for a site, sorted by publication date.
         Used for listing site content (e.g. by publication date).
+        Optional content_type maps to query param type (page, news, directory, ...).
         """
         path = "_ah/api/lumsites/v1/content/list"
         params = {
@@ -182,6 +184,8 @@ class LumAppsClient:
             params["orderBy"] = order_by
         if order_direction:
             params["orderDirection"] = order_direction
+        if content_type:
+            params["type"] = content_type
 
         data = await self._request("GET", path, token=token, params=params)
         return data.get("items", [])
@@ -321,9 +325,11 @@ class LumAppsClient:
         body: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """
-        Load the block/settings for a widget type on a site.
-        POST v2/organizations/{org_id}/widgets/{widget_type}/blocks?siteId=...&canUseLangFallback=...&forceDisplay=...
-        Used to get current widget config (body.style, text, etc.) before or after editing.
+        Post-save render (HAR /bot homepage): not the write path.
+        POST v2/organizations/{org_id}/widgets/{widget_type}/blocks?siteId=...&forceDisplay=true
+        (&canUseLangFallback=false for title).
+        Body observed: {ownerResourceInfo: {ownerResourceId, ownerResourceType: "content", properties},
+        widgetComponent: template widget}. Writes go through content/save.
         """
         path = f"v2/organizations/{self.org_id}/widgets/{widget_type}/blocks"
         params = {"siteId": site_id, "forceDisplay": str(force_display).lower()}
@@ -426,6 +432,16 @@ class LumAppsClient:
         if fields:
             params["fields"] = fields
         return await self._request("GET", path, token=token, params=params)
+
+    async def get_header(self, header_uid: str, token: str) -> Dict[str, Any]:
+        """GET _ah/api/lumsites/v1/header/get?uid= — slideshow lives here (HAR header/save)."""
+        path = "_ah/api/lumsites/v1/header/get"
+        return await self._request("GET", path, token=token, params={"uid": header_uid})
+
+    async def save_header(self, header: Dict[str, Any], token: str) -> Dict[str, Any]:
+        """POST _ah/api/lumsites/v1/header/save — BO style-save HAR write for slideshow."""
+        path = "_ah/api/lumsites/v1/header/save"
+        return await self._request("POST", path, token=token, json=header)
 
     async def save_instance(self, instance: Dict[str, Any], token: str) -> Dict[str, Any]:
         """
@@ -550,6 +566,144 @@ class LumAppsClient:
         """
         path = "_ah/api/lumsites/v1/style/save"
         return await self._request("POST", path, token=token, json=style)
+
+    async def list_feeds(
+        self,
+        token: str,
+        instance: str = None,
+        query: str = None,
+        max_results: int = 50,
+        cursor: str = None,
+    ) -> Dict[str, Any]:
+        """
+        List visibility groups (feeds). GET _ah/api/lumsites/v1/feed/list
+        Discovery: lumsites.feed.list (instance, query, maxResults, cursor).
+        """
+        path = "_ah/api/lumsites/v1/feed/list"
+        params: Dict[str, Any] = {"maxResults": min(max(1, max_results), 100)}
+        if instance:
+            params["instance"] = instance
+        if query:
+            params["query"] = query
+        if cursor:
+            params["cursor"] = cursor
+        return await self._request("GET", path, token=token, params=params)
+
+    async def list_directories(
+        self,
+        instance_id: str,
+        token: str,
+        status: str = "LIVE",
+        max_results: int = 50,
+        cursor: str = None,
+    ) -> Dict[str, Any]:
+        """
+        List directories on a site. GET _ah/api/lumsites/v1/directory/list
+        Discovery: lumsites.directory.list (instance required, status, maxResults, cursor).
+        """
+        path = "_ah/api/lumsites/v1/directory/list"
+        params: Dict[str, Any] = {
+            "instance": instance_id,
+            "maxResults": min(max(1, max_results), 100),
+            "status": status,
+        }
+        if cursor:
+            params["cursor"] = cursor
+        return await self._request("GET", path, token=token, params=params)
+
+    async def get_directory(self, directory_uid: str, token: str, fields: str = None) -> Dict[str, Any]:
+        """GET _ah/api/lumsites/v1/directory/get?uid=... Discovery: lumsites.directory.get."""
+        path = "_ah/api/lumsites/v1/directory/get"
+        params: Dict[str, Any] = {"uid": directory_uid}
+        if fields:
+            params["fields"] = fields
+        return await self._request("GET", path, token=token, params=params)
+
+    async def list_directory_entries(
+        self,
+        token: str,
+        directory_ids: List[str] = None,
+        instance_ids: List[str] = None,
+        max_results: int = 30,
+        cursor: str = None,
+        lang: str = None,
+    ) -> Dict[str, Any]:
+        """
+        List directory entries. POST _ah/api/lumsites/v1/directory/entry/list
+        Discovery request: ServerDirectory...DirectoryEntryListRequest
+        (directory[], instance[], maxResults, cursor, lang).
+        """
+        path = "_ah/api/lumsites/v1/directory/entry/list"
+        payload: Dict[str, Any] = {"maxResults": min(max(1, max_results), 100)}
+        if directory_ids:
+            payload["directory"] = directory_ids
+        if instance_ids:
+            payload["instance"] = instance_ids
+        if cursor:
+            payload["cursor"] = cursor
+        if lang:
+            payload["lang"] = lang
+        return await self._request("POST", path, token=token, json=payload)
+
+    async def get_directory_entry(self, entry_uid: str, token: str, fields: str = None) -> Dict[str, Any]:
+        """GET _ah/api/lumsites/v1/directory/entry/get?uid=... Discovery: lumsites.directory.entry.get."""
+        path = "_ah/api/lumsites/v1/directory/entry/get"
+        params: Dict[str, Any] = {"uid": entry_uid}
+        if fields:
+            params["fields"] = fields
+        return await self._request("GET", path, token=token, params=params)
+
+    async def save_directory_entry(self, entry: Dict[str, Any], token: str) -> Dict[str, Any]:
+        """
+        Create or update a directory entry. POST _ah/api/lumsites/v1/directory/entry/save
+        Discovery request/response: DirectoryEntry (directory, name, link, feedKeys, thumbnail, order, uid, ...).
+        """
+        path = "_ah/api/lumsites/v1/directory/entry/save"
+        return await self._request("POST", path, token=token, json=entry)
+
+    async def get_content_menu(
+        self,
+        instance_id: str,
+        token: str,
+        lang: str = "en",
+        customer: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Retrieve menu/navigation items. GET _ah/api/lumsites/v1/content/menu/get
+        Discovery: lumsites.content.menu.get (customer, instance, lang required).
+        Response: ContentMenuList { items: ContentMenuListItem[], deleted[], lang }.
+        """
+        path = "_ah/api/lumsites/v1/content/menu/get"
+        params = {
+            "customer": customer or self.org_id,
+            "instance": instance_id,
+            "lang": lang,
+        }
+        return await self._request("GET", path, token=token, params=params)
+
+    async def save_content_menu(
+        self,
+        token: str,
+        customer_id: str,
+        instance_id: str,
+        items: List[Dict[str, Any]],
+        deleted: List[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Save menu items. POST _ah/api/lumsites/v1/content/menu/save
+        Discovery: ServerContentContentMessagesSaveContentMenuRequest
+        { customerId, instanceId, items: ContentMenuList[], deleted[] }.
+        Only parent, hidden, hideChildren, isNavItem, menuTitle, and children are persisted by this endpoint.
+        """
+        path = "_ah/api/lumsites/v1/content/menu/save"
+        payload: Dict[str, Any] = {
+            "customerId": customer_id,
+            "instanceId": instance_id,
+            "items": items,
+        }
+        if deleted is not None:
+            payload["deleted"] = deleted
+        return await self._request("POST", path, token=token, json=payload)
 
 
 lumapps_client = LumAppsClient()

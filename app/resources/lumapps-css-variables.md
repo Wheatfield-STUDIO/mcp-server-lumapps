@@ -32,7 +32,7 @@ To access both the file and plugin, fill a request on this [form](https://docs.g
 
 - **Shadow variables**: Only `--lumx-app-header-box-shadow` is documented. Do **not** use `--lumx-shadow-1`, `--lumx-shadow-2`, `--lumx-shadow-3`, `--lumx-shadow-4`, or `--lumx-shadow-5` (they do not exist).
 - **Primary color tokens**: The design system uses `--lumx-color-primary-N`, `--lumx-color-primary-D1`, `--lumx-color-primary-D2`, `--lumx-color-primary-L2` … `--lumx-color-primary-L5`. Do **not** use `--lumx-color-primary-500`, `-600`, `-700` or other numeric suffixes (they do not exist).
-- **Component class names**: This document lists **CSS variables** only. LumApps does not expose official class names here (e.g. `.lumx-button`, `.lumx-button--primary` do not exist in this reference). For theme-wide changes, use variables. For overrides that have no variable (e.g. button text-transform), prefer inspecting the site DOM or avoid inventing class names.
+- **Component class names**: This document lists **CSS variables** only — it is not a class catalog. `.lumx-button` is absent here because this resource does not document DOM classes, not because the class is fake. If `inspect_front_html` listed a class (e.g. `.lumx-button`), that selector is legitimate. For theme-wide changes, prefer variables. For overrides with no variable, use classes from `inspect_front_html`; do not invent class names.
 
 ### Widget shadows (no CSS variable)
 

@@ -30,15 +30,23 @@ logger = logging.getLogger(__name__)
 
 ToolSensitivity = Literal["read", "content", "structural"]
 
-# Tools that require site Admin (CSS, layout, global settings)
+# Tools that require site Admin (CSS, layout, global settings, theme, navigation)
 STRUCTURAL_TOOLS: Set[str] = {
     "update_global_css",
     "update_site_global_settings",
+    "update_site_theme",
+    "inspect_navigation",
+    "update_navigation_item",
 }
 # Tools that allow Contributor or Admin (editing page content, widget style, or inspecting layout/CSS)
 CONTENT_TOOLS: Set[str] = {
     "update_widget_style",
+    "update_widget_settings",
     "inspect_lumapps_element",
+    "inspect_widget_render",
+    "inspect_front_html",
+    "save_content_page",
+    "upsert_directory_entry",
 }
 # All other tools are read-only
 READ_TOOLS: Set[str] = {
@@ -48,6 +56,21 @@ READ_TOOLS: Set[str] = {
     "find_person",
     "get_useful_links",
     "search_site",
+    "list_directories",
+}
+
+# Tools that resolve content_id → site_id when site_id is omitted.
+_CONTENT_ID_SITE_TOOLS: Set[str] = {
+    "update_widget_style",
+    "update_widget_settings",
+    "inspect_lumapps_element",
+    "inspect_widget_render",
+    "inspect_front_html",
+    "save_content_page",
+}
+# Tools that resolve directory_id → site_id when site_id is omitted.
+_DIRECTORY_ID_SITE_TOOLS: Set[str] = {
+    "upsert_directory_entry",
 }
 
 
@@ -245,13 +268,14 @@ async def resolve_target_site_id(
 ) -> Optional[str]:
     """
     Resolve the target site_id for the tool. Uses arguments['site_id'] when present.
-    For update_widget_style, resolves content_id -> site_id via get_content (with cache).
+    For content tools, resolves content_id -> site_id via get_content (with cache).
+    For upsert_directory_entry, resolves directory_id -> site_id via get_content or directory/get.
     """
     site_id = arguments.get("site_id") or arguments.get("siteId")
     if isinstance(site_id, str) and site_id.strip():
         return site_id.strip()
 
-    if tool_name in ("update_widget_style", "inspect_lumapps_element"):
+    if tool_name in _CONTENT_ID_SITE_TOOLS:
         content_id = arguments.get("content_id")
         if not content_id or not isinstance(content_id, str) or not content_id.strip():
             return None
@@ -274,6 +298,37 @@ async def resolve_target_site_id(
                 resolved = instance
             if isinstance(resolved, str) and resolved.strip():
                 await cache.set(content_id, resolved.strip())
+                return resolved.strip()
+        return None
+
+    if tool_name in _DIRECTORY_ID_SITE_TOOLS:
+        directory_id = arguments.get("directory_id")
+        if not directory_id or not isinstance(directory_id, str) or not directory_id.strip():
+            return None
+        directory_id = directory_id.strip()
+        cache = _get_content_site_cache()
+        cached = await cache.get(f"dir:{directory_id}")
+        if cached is not None:
+            return cached
+        if token:
+            from app.services.lumapps_client import lumapps_client
+            instance = None
+            try:
+                content = await lumapps_client.get_content(directory_id, token=token)
+                instance = content.get("instance")
+            except Exception:
+                try:
+                    directory = await lumapps_client.get_directory(directory_id, token=token)
+                    instance = directory.get("instance")
+                except Exception as e:
+                    logger.warning("resolve_target_site_id directory lookup failed: %s", e)
+                    return None
+            if isinstance(instance, dict):
+                resolved = instance.get("uid") or instance.get("id")
+            else:
+                resolved = instance
+            if isinstance(resolved, str) and resolved.strip():
+                await cache.set(f"dir:{directory_id}", resolved.strip())
                 return resolved.strip()
         return None
     return None

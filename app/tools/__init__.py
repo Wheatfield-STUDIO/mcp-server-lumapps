@@ -22,6 +22,7 @@ from typing import Any, Dict, Callable, Awaitable
 from app.jsonrpc.dispatcher import dispatcher
 from app.core.user_context import get_user_context
 from app.core.rbac import authorize_tool_call, get_tool_sensitivity, RBACError
+from app.core.allowlist import AllowlistError, require_allowed_user_email
 import logging
 
 from app.tools import (
@@ -30,9 +31,18 @@ from app.tools import (
     find_person,
     get_useful_links,
     inspect_lumapps_element,
+    inspect_widget_render,
+    inspect_front_html,
     update_global_css,
     update_site_global_settings,
     update_widget_style,
+    update_widget_settings,
+    update_site_theme,
+    save_content_page,
+    list_directories,
+    upsert_directory_entry,
+    inspect_navigation,
+    update_navigation_item,
     search_site,
 )
 from app.resources.registry import list_resources_metadata, read_resource_content
@@ -59,9 +69,18 @@ def _build_registry() -> None:
     _register(find_person.TOOL_SCHEMA, find_person.handle)
     _register(get_useful_links.TOOL_SCHEMA, get_useful_links.handle)
     _register(inspect_lumapps_element.TOOL_SCHEMA, inspect_lumapps_element.handle)
+    _register(inspect_widget_render.TOOL_SCHEMA, inspect_widget_render.handle)
+    _register(inspect_front_html.TOOL_SCHEMA, inspect_front_html.handle)
     _register(update_global_css.TOOL_SCHEMA, update_global_css.handle)
     _register(update_site_global_settings.TOOL_SCHEMA, update_site_global_settings.handle)
     _register(update_widget_style.TOOL_SCHEMA, update_widget_style.handle)
+    _register(update_widget_settings.TOOL_SCHEMA, update_widget_settings.handle)
+    _register(update_site_theme.TOOL_SCHEMA, update_site_theme.handle)
+    _register(save_content_page.TOOL_SCHEMA, save_content_page.handle)
+    _register(list_directories.TOOL_SCHEMA, list_directories.handle)
+    _register(upsert_directory_entry.TOOL_SCHEMA, upsert_directory_entry.handle)
+    _register(inspect_navigation.TOOL_SCHEMA, inspect_navigation.handle)
+    _register(update_navigation_item.TOOL_SCHEMA, update_navigation_item.handle)
     _register(search_site.TOOL_SCHEMA, search_site.handle)
 
 
@@ -114,6 +133,11 @@ async def tools_call(params: Any) -> Dict[str, Any]:
         available = sorted({s["name"] for s, _ in TOOLS.values()})
         raise ValueError(f"Unknown tool: {name}. Available: {', '.join(available)}")
     arguments = _resolve_user_email(arguments)
+    try:
+        require_allowed_user_email(arguments.get("user_email"))
+    except AllowlistError as e:
+        logger.warning("allowlist denied tools/call name=%s", name)
+        raise ValueError(e.message)
     token = None
     sensitivity = get_tool_sensitivity(name)
     if sensitivity in ("structural", "content") and arguments.get("user_email"):

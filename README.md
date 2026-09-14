@@ -65,8 +65,9 @@ cp .env.example .env
 
 2. **Required variables**:
    - **Auth**: either `OIDC_ISSUER_URL` (for SSO) or `MCP_API_KEY` with `AUTH_ALLOW_API_KEY_FALLBACK=true` (see [SSO / OIDC](#sso--oidc-enterprise)).
+   - `MCP_ALLOWED_USER_EMAILS`: comma-separated LumApps mailboxes allowed to run **any** `tools/call` (read and write). **Fail closed**: empty or unset denies all tool calls, including API-key impersonation and OIDC. Required when `/mcp` is public.
    - `LUMAPPS_ORG_ID`: LumApps organization ID.
-   - Either `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`), or `LUMAPPS_ACCESS_TOKEN` (for testing).
+   - Either `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`), or `LUMAPPS_ACCESS_TOKEN` (tests only — not a production default).
 
 3. **Optional variables**:
    - `AUTH_MODE`: `oidc_preferred` (default) or `api_key_only`. With `api_key_only`, only `MCP_API_KEY` is accepted.
@@ -74,7 +75,7 @@ cp .env.example .env
    - `OIDC_ISSUER_URL`, `OIDC_AUDIENCE`, `OIDC_CLIENT_ID`, `OIDC_EMAIL_CLAIM`, `OIDC_USERNAME_CLAIM`, `OIDC_CLOCK_SKEW_SECONDS`: see [SSO / OIDC](#sso--oidc-enterprise) and `.env.example`.
    - `MCP_PUBLIC_URL`: public server URL (e.g. devtunnel/ngrok) so clients get the correct URL in MCP events.
    - `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`: second LumApps OAuth app with **all.admin** scope (see [Read vs admin credentials](#read-vs-admin-credentials) below).
-   - **RBAC** (see [User-level RBAC](#user-level-rbac)): `RBAC_ENABLED`, `RBAC_USE_LUMAPPS_NATIVE`, `RBAC_ORG_ADMIN_CLAIM`, and (fallback) `RBAC_ROLE_CLAIM`, `RBAC_*_PATTERNS`, `RBAC_DENY_API_KEY_FOR_NON_READ`, `RBAC_CONTENT_SITE_CACHE_*`.
+   - **RBAC** (see [User-level RBAC](#user-level-rbac)): `RBAC_ENABLED`, `RBAC_USE_LUMAPPS_NATIVE`, `RBAC_ORG_ADMIN_CLAIM`, and (fallback) `RBAC_ROLE_CLAIM`, `RBAC_*_PATTERNS`, `RBAC_DENY_API_KEY_FOR_NON_READ`, `RBAC_CONTENT_SITE_CACHE_*`. Keep `RBAC_ENABLED=true`. `RBAC_DENY_API_KEY_FOR_NON_READ` stays independently configurable (default `true`); the email allowlist still applies to reads.
    - `CORS_ORIGINS`: extra CORS origins (comma-separated).
    - `LOG_LEVEL`, `MAX_SEARCH_RESULTS`, etc.
 
@@ -82,17 +83,32 @@ cp .env.example .env
 
 **Important**: never commit the `.env` file (it is listed in `.gitignore`).
 
+### Security (public `/mcp`)
+
+A public Streamable HTTP `/mcp` plus a static API key is **not** tenant isolation by itself. The key authenticates the client; LumApps tools still impersonate whoever `user_email` names. These controls are **server-side** and apply even if a client ignores them.
+
+| Control | Behaviour |
+| --- | --- |
+| **`MCP_ALLOWED_USER_EMAILS`** | Fail closed. Every `tools/call` (read and write) must resolve to an email on this list (case-insensitive). Empty or unset → deny all API-key and impersonation tool calls. OIDC emails must also be on the list. `initialize` and `tools/list` still work with a valid API key. |
+| **API key transport** | Only `X-API-Key` or `Authorization: Bearer <MCP_API_KEY>`. Query-string `?apiKey=` and `?token=` are **rejected** (401), even if a valid header is also present. |
+| **`RBAC_DENY_API_KEY_FOR_NON_READ`** | Unchanged (default `true`; you may set `false` for a trusted Grok Bot). The email allowlist still applies to **reads**. |
+| **`RBAC_ENABLED`** | Must stay `true`. Do not disable RBAC to “make the Bot work”. |
+| **`LUMAPPS_ACCESS_TOKEN`** | Tests only. Do not use it as the production default. |
+| **IP allowlist** | **Not implemented.** Cursor / Grok Bot egress IPs are not published; a guessed CIDR list would break the Bot. Do not invent `MCP_ALLOWED_IPS`. |
+
+Do not log API keys, Bearer tokens, or allowlisted emails. Denied tool calls log the **tool name** only.
+
 ### Read vs admin credentials
 
 LumApps OAuth applications are created with a fixed scope: **all.read** (read-only) or **all.admin** (read + write). This server separates **end-user tools** (read) from **admin tools** (modifications) by using two credential pairs when both are configured:
 
 | Purpose                   | Env vars                                                                                                   | LumApps scope | Tools                                                                                                             |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Read (end users)**      | `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`) | **all.read**  | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`                             |
-| **Admin (content + structural)** | `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`                                            | **all.admin** | `inspect_lumapps_element`, `update_widget_style`, `update_global_css`, `update_site_global_settings`                 |
+| **Read (end users + inspect)** | `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`) | **all.read**  | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`, `inspect_lumapps_element`, `inspect_widget_render`, `inspect_front_html`, `inspect_navigation` |
+| **Admin (writes)**        | `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`                                            | **all.admin** | `update_widget_style`, `update_widget_settings`, `update_global_css`, `update_site_global_settings`, `update_site_theme`, `save_content_page`, `upsert_directory_entry`, `update_navigation_item` |
 
-- **Recommended setup**: Create **two OAuth applications** in LumApps for the same organization: one with **all.read** (for end-user search and inspection), one with **all.admin** (for CSS and widget updates). Set the read app in `LUMAPPS_READ_CLIENT_ID`/`LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`) and the admin app in `LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`. The server will use the read app for read tools and the admin app for modification tools; tokens are cached per user and per profile.
-- **Read-only deployment**: If you only set the read credentials, **inspect and modification tools will not work**. `inspect_lumapps_element`, `update_global_css`, `update_widget_style` and `update_site_global_settings` require the admin app; calling them without admin credentials will return a clear error.
+- **Recommended setup**: Create **two OAuth applications** in LumApps for the same organization: one with **all.read** (for search and inspect), one with **all.admin** (for writes). Set the read app in `LUMAPPS_READ_CLIENT_ID`/`LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`) and the admin app in `LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`. The server will use the read app for read/inspect tools and the admin app for modification tools; tokens are cached per user and per profile.
+- **Read-only deployment**: If you only set the read credentials, **inspect works** (`inspect_lumapps_element`, `inspect_widget_render`, `inspect_front_html`, `inspect_navigation`). `inspect_front_html` does not call the LumApps API for pasted HTML. Write tools still require the admin app; calling them without `LUMAPPS_ADMIN_*` returns a clear error.
 - **Single token (tests)**: If you set `LUMAPPS_ACCESS_TOKEN`, that token is used for both read and admin; no separate admin credentials are needed. The token must have the scope required by the tools you use (admin scope if you call modification tools).
 
 ---
@@ -167,19 +183,22 @@ Credentials stay inside your perimeter; use your existing secret management (e.g
 | `find_person`                 | Search people in the directory                                               | Read       | read                   |
 | `get_useful_links`            | Search useful links (Directory Entries: train, IT, training, etc.)           | Read       | read                   |
 | `search_site`                 | List or search LumApps sites (instances) for discovery and user confirmation | Read       | read                   |
-| `inspect_lumapps_element`     | Inspect page layout or site global CSS (API only); prepares edits           | **Content** | admin (canEdit/site admin)      |
+| `inspect_lumapps_element`     | Inspect page layout or site theme (API only); prepares edits                 | **Content** | read (all.read)       |
+| `inspect_widget_render`       | Post-save widget/row/page render (`/widgets/{type}/blocks`) + class names    | **Content** | read (all.read)       |
+| `inspect_front_html`          | List real DOM classes from pasted outerHTML or SSR GET (no Playwright)       | **Content** | none (HTML) / GET     |
+| `inspect_navigation`          | Inspect the site navigation tree                                             | Structural | read (all.read)       |
 | `update_global_css`           | Update site global CSS                                                       | Structural | admin (all.admin)     |
 | `update_widget_style`         | Update a widget's style on a page                                            | Content    | admin + canEdit       |
 | `update_site_global_settings` | Update site footer HTML and/or head scripts                                  | Structural | admin                 |
 
 - **Level**: RBAC sensitivity. **Read** = any authenticated user. **Content** = Contributor or Admin on the page/site (inspect + widget style). **Structural** = Site Administrator only (global CSS, global settings).
-- **LumApps credentials**: **Read**-level tools use the **read** app. **Content** (`inspect_lumapps_element`, `update_widget_style`) and **Structural** tools use the **admin** app (`LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`) when configured. See [Read vs admin credentials](#read-vs-admin-credentials). When [user-level RBAC](#user-level-rbac) is enabled, API key alone cannot run Content or Structural tools.
+- **LumApps credentials**: **Read** and **inspect** tools (`inspect_lumapps_element`, `inspect_widget_render`, `inspect_navigation`) use the **read** app (`all.read`). `inspect_front_html` lists classes from pasted HTML or a public GET (no LumApps token). They do **not** need `LUMAPPS_ADMIN_*`. **Write** tools (Content and Structural updates) use the **admin** app when configured. See [Read vs admin credentials](#read-vs-admin-credentials). When [user-level RBAC](#user-level-rbac) is enabled, API key alone cannot run Content or Structural tools unless `RBAC_DENY_API_KEY_FOR_NON_READ=false`.
 
 ### Conduct rules for modification tools
 
 The tool schemas for **`update_widget_style`**, **`update_global_css`** and **`update_site_global_settings`** instruct the AI to follow strict rules so changes are never applied without user consent:
 
-1. **Always run `inspect_lumapps_element` first** — to get accurate `content_id`/`widget_id` or to target the right elements before changing CSS.
+1. **Always run `inspect_lumapps_element` first** — stored settings / `content_id`. Then **`inspect_widget_render`** for `/blocks` `cssClass` (token). Live CSS is `skin: .{cssClass} → .widget--{cssClass}` (proven content-list / directory). For deep widget CSS (`.lumx-*`, inner title/span) run **`inspect_front_html`** with pasted outerHTML (not a local filesystem path). Do not invent `.lumx-*` from `/blocks`. Classes listed by `inspect_front_html` are legitimate. `properties.widgetClass` is not the skin hook.
 2. **Present the modification to the user** — describe or show what will be changed (no need to expose raw JSON or CSS unless useful).
 3. **Wait for explicit confirmation** — do not call the tool until the user has replied with "Yes" or "Confirm" (or equivalent) in the chat.
 4. **Never apply changes silently** — the AI must not invoke these tools without having obtained confirmation.
@@ -207,7 +226,9 @@ Content is stored in `app/resources/` and can be updated without code changes.
 
 - **MCP authentication**: dual mode.
   - **OIDC preferred** (default): send `Authorization: Bearer <user-id-token>` from your IdP (Azure AD, Okta, Ping, etc.). The server validates the JWT (signature, issuer, audience, expiry) and binds every tool call to the verified user; `user_email` is taken from token claims and must not be overridden by the client.
-  - **API key fallback**: when `AUTH_ALLOW_API_KEY_FALLBACK=true`, you can still use `X-API-Key`, `Authorization: Bearer <static-key>`, or query `apiKey` / `token` with `MCP_API_KEY`. For production SSO-only, set `AUTH_ALLOW_API_KEY_FALLBACK=false`. When [user-level RBAC](#user-level-rbac) is enabled, API key alone is **read-only**: Content and Structural tools are denied and require OIDC identity.
+  - **API key fallback**: when `AUTH_ALLOW_API_KEY_FALLBACK=true`, send `X-API-Key` or `Authorization: Bearer <MCP_API_KEY>`. Query-string `?apiKey=` and `?token=` are **rejected** (keys must not appear in URLs or access logs). For production SSO-only, set `AUTH_ALLOW_API_KEY_FALLBACK=false`. When [user-level RBAC](#user-level-rbac) is enabled, API key alone is **read-only** unless `RBAC_DENY_API_KEY_FOR_NON_READ=false`.
+- **Email allowlist**: every LumApps `tools/call` (read and write) requires a resolved `user_email` listed in `MCP_ALLOWED_USER_EMAILS` (case-insensitive). Empty or unset = deny all impersonation. Applies to API-key `user_email` arguments and to OIDC token emails. `initialize` / `tools/list` still work with a valid API key so the client can connect.
+- **No IP allowlist**: `MCP_ALLOWED_IPS` is not implemented. Cursor / Grok Bot Cloud Agent egress IPs are not published; a CIDR list would break the Bot.
 - **Root endpoint**: `GET /` is unauthenticated (info only). `POST /` accepts JSON-RPC only when authenticated (same as `/mcp`).
 - **Secrets**: no hardcoded secrets; everything comes from config (`pydantic-settings` + `.env`).
 - **`.env`**: for local development only; must not be versioned. In production use environment variables or a secrets store.
@@ -218,9 +239,9 @@ The server enforces **user-level** role checks so that LumApps governance is res
 
 - **Global Admin (Platform)**: **LumApps user token** payload (the token obtained via impersonation) must contain **`isOrgAdmin: true`** (configurable via `RBAC_ORG_ADMIN_CLAIM`). That token is generated from OAuth2 client credentials + user email; the claim comes from LumApps, not from the OIDC JWT.
 - **Site Admin (Structural tools)**: LumApps **`GET service/front-init?fields=user`** returns `user.instancesSuperAdmin` (site IDs where the user is admin) and `user.isSuperAdmin`. The user must be in that list (or `isSuperAdmin`) for `update_global_css` and `update_site_global_settings`.
-- **Content Editor (Content tools)**: LumApps **`GET content/get?uid=...&fields=canEdit`** returns whether the user can edit that page. Used for `inspect_lumapps_element` and `update_widget_style` when targeting a specific content; when only a site is targeted (e.g. inspect global CSS), Site Admin is required.
+- **Content Editor (Content tools)**: LumApps **`GET content/get?uid=...&fields=canEdit`** returns whether the user can edit that page. Used for `inspect_lumapps_element`, `inspect_widget_render`, and `update_widget_style` when targeting a specific content; when only a site is targeted (e.g. inspect global CSS), Site Admin is required.
 
-**Read tools** remain available to any authenticated user (API key or OIDC). If LumApps returns 401/403 on a write, the server returns a secure, governance-friendly message. In native mode, if the LumApps user token cannot be obtained for RBAC checks, access is denied (fail-closed). A short-lived cache resolves `content_id` → `site_id` for widget updates.
+**Read tools** still require an allowlisted `user_email` (they are not open to every API-key holder). If LumApps returns 401/403 on a write, the server returns a secure, governance-friendly message. In native mode, if the LumApps user token cannot be obtained for RBAC checks, access is denied (fail-closed). A short-lived cache resolves `content_id` → `site_id` for widget updates. Do not disable `RBAC_ENABLED` on a public `/mcp`.
 
 When **`RBAC_USE_LUMAPPS_NATIVE=false`**, the server falls back to **OIDC role patterns** (`RBAC_ADMIN_PATTERNS`, `RBAC_CONTRIBUTOR_PATTERNS`, `RBAC_GLOBAL_ADMIN_PATTERNS`) with `{site_id}` substitution.
 

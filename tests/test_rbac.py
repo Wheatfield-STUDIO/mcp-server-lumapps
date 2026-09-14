@@ -35,10 +35,19 @@ from app.core.user_context import UserContext
 def test_get_tool_sensitivity() -> None:
     assert get_tool_sensitivity("search_content") == "read"
     assert get_tool_sensitivity("search_lumapps") == "read"
+    assert get_tool_sensitivity("list_directories") == "read"
     assert get_tool_sensitivity("inspect_lumapps_element") == "content"
+    assert get_tool_sensitivity("inspect_widget_render") == "content"
+    assert get_tool_sensitivity("inspect_front_html") == "content"
+    assert get_tool_sensitivity("update_widget_style") == "content"
+    assert get_tool_sensitivity("update_widget_settings") == "content"
+    assert get_tool_sensitivity("save_content_page") == "content"
+    assert get_tool_sensitivity("upsert_directory_entry") == "content"
     assert get_tool_sensitivity("update_global_css") == "structural"
     assert get_tool_sensitivity("update_site_global_settings") == "structural"
-    assert get_tool_sensitivity("update_widget_style") == "content"
+    assert get_tool_sensitivity("update_site_theme") == "structural"
+    assert get_tool_sensitivity("inspect_navigation") == "structural"
+    assert get_tool_sensitivity("update_navigation_item") == "structural"
     assert get_tool_sensitivity("unknown_tool") == "read"
 
 
@@ -66,6 +75,35 @@ def test_structural_tool_with_api_key_denied(client: TestClient) -> None:
     assert "error" in data
     assert data["error"]["message"]
     assert "OIDC" in data["error"]["message"] or "authenticated user" in data["error"]["message"].lower()
+
+
+def test_new_write_tools_with_api_key_denied(client: TestClient) -> None:
+    """Content/structural writes added for grok-bot are denied with API key only."""
+    cases = (
+        ("update_widget_settings", {"content_id": "c1", "widget_id": "w1", "settings_updates": "{}", "user_email": "dev@example.com"}),
+        ("update_site_theme", {"site_id": "site-123", "palette": {"primary": "#000"}, "user_email": "dev@example.com"}),
+        ("save_content_page", {"site_id": "site-123", "mode": "create", "title": "T", "user_email": "dev@example.com"}),
+        ("upsert_directory_entry", {"directory_id": "d1", "title": "Link", "url": "https://x", "user_email": "dev@example.com"}),
+        ("update_navigation_item", {"site_id": "site-123", "item_id": "n1", "label": "Home", "user_email": "dev@example.com"}),
+        ("inspect_navigation", {"site_id": "site-123", "user_email": "dev@example.com"}),
+        ("inspect_widget_render", {"content_id": "c1", "user_email": "dev@example.com"}),
+        ("inspect_front_html", {"content_id": "c1", "html": "<div class='lumx-link'>x</div>", "user_email": "dev@example.com"}),
+    )
+    for name, arguments in cases:
+        r = client.post(
+            "/mcp",
+            headers={"X-API-Key": "test-mcp-api-key"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert "error" in data, name
+        assert "OIDC" in data["error"]["message"] or "authenticated user" in data["error"]["message"].lower()
 
 
 def test_read_tool_with_api_key_allowed(client: TestClient) -> None:
@@ -170,6 +208,14 @@ def test_authorize_content_allowed_contributor() -> None:
             asyncio.run(authorize_tool_call(
                 "inspect_lumapps_element",
                 {"site_id": "site-abc", "user_email": "contrib@example.com"},
+            ))
+            asyncio.run(authorize_tool_call(
+                "inspect_widget_render",
+                {"content_id": "c1", "site_id": "site-abc", "user_email": "contrib@example.com"},
+            ))
+            asyncio.run(authorize_tool_call(
+                "inspect_front_html",
+                {"content_id": "c1", "site_id": "site-abc", "user_email": "contrib@example.com"},
             ))
 
 
@@ -283,6 +329,28 @@ def test_resolve_target_site_id_from_content_id_via_api() -> None:
             token="fake-token",
         ))
     assert out == "resolved-site-456"
+
+
+def test_resolve_target_site_id_new_content_tools() -> None:
+    """New content tools resolve content_id the same way as update_widget_style."""
+    from app.services.lumapps_client import lumapps_client
+    with patch.object(lumapps_client, "get_content", new_callable=AsyncMock, return_value={"instance": {"uid": "site-from-content"}}):
+        for tool in ("update_widget_settings", "save_content_page"):
+            out = asyncio.run(resolve_target_site_id(tool, {"content_id": "c-new"}, token="fake-token"))
+            assert out == "site-from-content"
+
+
+def test_resolve_target_site_id_from_directory_id() -> None:
+    """upsert_directory_entry: directory_id -> site_id via directory/get when content/get fails."""
+    from app.services.lumapps_client import lumapps_client
+    with patch.object(lumapps_client, "get_content", new_callable=AsyncMock, side_effect=RuntimeError("not content")):
+        with patch.object(lumapps_client, "get_directory", new_callable=AsyncMock, return_value={"instance": "dir-site-1"}):
+            out = asyncio.run(resolve_target_site_id(
+                "upsert_directory_entry",
+                {"directory_id": "dir-xyz"},
+                token="fake-token",
+            ))
+    assert out == "dir-site-1"
 
 
 def test_content_site_cache_hit() -> None:

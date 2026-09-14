@@ -35,6 +35,14 @@ class LumAppsAuthManager:
     def _cache_key(self, user_email: str, profile: Profile) -> str:
         return f"{user_email}:{profile}"
 
+    async def get_inspect_token(self, user_email: str) -> str:
+        """
+        Token for GET inspect tools (layout, theme, navigation).
+        Always uses the read OAuth app (all.read). Does not require LUMAPPS_ADMIN_*.
+        Write tools must keep calling get_token(..., profile="admin").
+        """
+        return await self.get_token(user_email=user_email, profile="read")
+
     async def get_token(self, user_email: str, profile: Profile = "read") -> str:
         """
         Return a bearer token for the given user and profile.

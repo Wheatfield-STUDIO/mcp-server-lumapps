@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`inspect_front_html`**: lists real front DOM classes from pasted `outerHTML` or an HTTP GET that is already HTML with `.lumx-*`. Paste the markup — no local filesystem path (the server cannot read the caller's disk). Large dumps truncate to the first `.widget`. Cheat-sheet is grouped (skin / lumx / `block-*` / anchors). `skin: .{cssClass} → .widget--{cssClass}` (token in `/blocks`; prefixed class in CSS; proven content-list / directory). SPA shells without `.lumx-*` are reported as such; no Playwright/Chromium. RBAC **content**. Conduct: inspect → render → front HTML → `update_global_css` on listed selectors.
+- **`inspect_widget_render`**: post-save render via HAR `POST /v2/organizations/{org}/widgets/{type}/blocks?siteId=&forceDisplay=true` with `{ownerResourceInfo, widgetComponent}`. One widget (template uuid / widgetType), a row (compose cell widgets), or the page (compose all widgets). Lists class names from `widget.cssClass` and any HTML `class` attributes. `/blocks` returns a JSON block tree, not DOM HTML. No page HTML endpoint in the HAR; `get_content_body` is extracted article text. RBAC **content** (same as inspect). Conduct: inspect, then render, then `update_global_css`.
+- **Email allowlist (fail closed)**: `MCP_ALLOWED_USER_EMAILS` is required for every LumApps `tools/call` (read and write). Empty or unset denies all API-key and impersonation tool calls. OIDC emails must also be on the list. Matching is case-insensitive. `initialize` / `tools/list` still work with a valid API key.
+- **No query-string API keys**: `?apiKey=` and `?token=` are rejected. Only `X-API-Key` or `Authorization: Bearer <MCP_API_KEY>` are accepted.
+
+### Changed
+
+- **Inspect uses read OAuth**: `inspect_lumapps_element` (layout and site theme) and `inspect_navigation` request LumApps `profile=read`. They no longer need `LUMAPPS_ADMIN_*` / `all.admin`. Write tools still use `profile=admin`.
+- **Inspect returns full widget IDs**: layout `widgetId` and template `uuid` are printed in full (including the components tree). IDs are no longer truncated to 8 characters, so `update_widget_settings` / `update_widget_style` can use the real widgetId.
+- **Inspect dumps every template widget**: content-list / directory widgets that exist only in `content.template` now get a full dump (uuid, settings, widgetClass, identifier, parent). `get_widget_blocks` is no longer called (it 400s without `ownerResourceId` and does not help).
+- **content/save revision**: widget writes GET the current page, merge, then save, and are serialized per `content_id` to avoid `CONTENT_NOT_UP_TO_DATE`. `update_widget_settings` matches `content.template` by full uuid (optional 8-char prefix if unique).
+- **One widget, one write id**: inspect pairs layout widgetId with template uuid (type+index when IDs differ). `use this id for writes` is the template uuid; layoutId is also accepted via map.
+- **/bot content/save (HAR)**: inspect dumps `properties.settings` plus sibling keys. **CSS skin** = `skin: .{cssClass} → .widget--{cssClass}` (`properties.class` / `/blocks` `widget.cssClass` stays the token; live CSS targets the prefix; proven content-list / directory). `widgetClass` is other/legacy and does **not** appear in `/blocks`. `settings.fields` vs `/blocks` `items[].order`: if `order` still has a field marked off (e.g. excerpt), `inspect_widget_render` flags that settings.fields did not win. Slideshow is **header/save**. `update_global_css` no longer rejects file paths; oversized `new_css` (font base64) gets a split/omit-font message. Classes listed by `inspect_front_html` (e.g. `.lumx-button`) are legitimate even though the css-variables resource does not catalog them.
+
+### Security
+
+- Do not disable `RBAC_ENABLED`. `RBAC_DENY_API_KEY_FOR_NON_READ` remains independently configurable; the allowlist still applies to reads. `LUMAPPS_ACCESS_TOKEN` is not a production default. IP allowlisting is not implemented (Cursor/Grok Bot egress IPs are unpublished).
+
 ## [1.1.0] - 2026-03-01
 
 ### Added

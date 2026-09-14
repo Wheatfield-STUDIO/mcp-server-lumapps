@@ -24,6 +24,8 @@ class Settings(BaseSettings):
 
     MCP_API_KEY: Optional[str] = None
     MCP_PUBLIC_URL: Optional[str] = None
+    # Fail-closed impersonation allowlist (comma-separated). Empty/unset denies all LumApps tool calls.
+    MCP_ALLOWED_USER_EMAILS: Optional[str] = None
 
     # Auth mode: oidc_preferred (validate Bearer as OIDC JWT, optional API key fallback) or api_key_only (legacy)
     AUTH_MODE: AuthMode = "oidc_preferred"
