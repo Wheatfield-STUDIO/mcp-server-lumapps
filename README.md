@@ -185,7 +185,7 @@ Credentials stay inside your perimeter; use your existing secret management (e.g
 | `search_site`                 | List or search LumApps sites (instances) for discovery and user confirmation | Read       | read                   |
 | `inspect_lumapps_element`     | Inspect page layout or site theme (API only); prepares edits                 | **Content** | read (all.read)       |
 | `inspect_widget_render`       | Post-save widget/row/page render (`/widgets/{type}/blocks`) + class names    | **Content** | read (all.read)       |
-| `inspect_front_html`          | List real DOM classes from pasted outerHTML, html_path, or SSR GET (no Playwright) | **Content** | none (HTML) / GET     |
+| `inspect_front_html`          | List real DOM classes from pasted outerHTML or SSR GET (no Playwright)       | **Content** | none (HTML) / GET     |
 | `inspect_navigation`          | Inspect the site navigation tree                                             | Structural | read (all.read)       |
 | `update_global_css`           | Update site global CSS                                                       | Structural | admin (all.admin)     |
 | `update_widget_style`         | Update a widget's style on a page                                            | Content    | admin + canEdit       |
@@ -198,7 +198,7 @@ Credentials stay inside your perimeter; use your existing secret management (e.g
 
 The tool schemas for **`update_widget_style`**, **`update_global_css`** and **`update_site_global_settings`** instruct the AI to follow strict rules so changes are never applied without user consent:
 
-1. **Always run `inspect_lumapps_element` first** — stored settings / `content_id`. Then **`inspect_widget_render`** for `/blocks` `cssClass` (token). Live CSS is `skin: .{cssClass} → .widget--{cssClass}` (proven content-list / directory). For deep widget CSS (`.lumx-*`, inner title/span) run **`inspect_front_html`** with pasted outerHTML or `html_path`. Do not invent `.lumx-*` from `/blocks`. Classes listed by `inspect_front_html` are legitimate. `properties.widgetClass` is not the skin hook.
+1. **Always run `inspect_lumapps_element` first** — stored settings / `content_id`. Then **`inspect_widget_render`** for `/blocks` `cssClass` (token). Live CSS is `skin: .{cssClass} → .widget--{cssClass}` (proven content-list / directory). For deep widget CSS (`.lumx-*`, inner title/span) run **`inspect_front_html`** with pasted outerHTML (not a local filesystem path). Do not invent `.lumx-*` from `/blocks`. Classes listed by `inspect_front_html` are legitimate. `properties.widgetClass` is not the skin hook.
 2. **Present the modification to the user** — describe or show what will be changed (no need to expose raw JSON or CSS unless useful).
 3. **Wait for explicit confirmation** — do not call the tool until the user has replied with "Yes" or "Confirm" (or equivalent) in the chat.
 4. **Never apply changes silently** — the AI must not invoke these tools without having obtained confirmation.

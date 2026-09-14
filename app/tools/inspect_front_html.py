@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Inspect front DOM classes from pasted outerHTML, html_path, or an SSR HTML GET. No Playwright."""
+"""Inspect front DOM classes from pasted outerHTML or an SSR HTML GET. No Playwright."""
 
 import logging
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
@@ -35,7 +34,8 @@ TOOL_SCHEMA = {
     "description": (
         "List **real front DOM classes** from HTML that already contains them. "
         "This server does not run Playwright/Chromium. url= GET of /bot/home is login/SPA only — "
-        "paste outerHTML into `html`, or pass `html_path` (server-side outerHTML file). "
+        "paste outerHTML into `html`. Do not pass a local filesystem path "
+        "(this server cannot read the caller's disk). "
         "`skin: .{cssClass} → .widget--{cssClass}` (/blocks stays the token; CSS targets the prefix; "
         "proven content-list / directory). Do not pick token vs prefixed at random. "
         "Cheat-sheet is grouped: skin / lumx / block-* / anchors. "
@@ -47,14 +47,11 @@ TOOL_SCHEMA = {
         "properties": {
             "html": {
                 "type": "string",
-                "description": "Pasted outerHTML from the live page (Grok Bot browser). Source of truth for .lumx-* / inner title/span.",
-            },
-            "html_path": {
-                "type": "string",
                 "description": (
-                    "Server-side file of widget/page outerHTML (this tool only, read). "
-                    "Use when pasted html is too large. Must look like HTML. "
-                    "Not used by update_global_css."
+                    "Pasted outerHTML from the live page (Grok Bot browser). "
+                    "Source of truth for .lumx-* / inner title/span. "
+                    "Paste the markup string — not a local filesystem path "
+                    "(this server runs remotely and cannot read /workspace or the user's disk)."
                 ),
             },
             "url": {
@@ -79,7 +76,6 @@ TOOL_SCHEMA = {
 }
 
 MAX_FETCH_CHARS = 600_000
-MAX_HTML_PATH_BYTES = 2_000_000
 LARGE_HTML_CHARS = 16_000
 MAX_CLASSES = 200
 MAX_SIGNATURES = 80
@@ -87,7 +83,8 @@ FETCH_TIMEOUT = 20.0
 
 SPA_DISCLAIMER = (
     "This server does not run Playwright/Chromium. "
-    "url= GET of /bot/home is login/SPA only — paste outerHTML or pass html_path."
+    "url= GET of /bot/home is login/SPA only — paste outerHTML into html= "
+    "(no local filesystem path)."
 )
 
 # Product BEM on .widget — not properties.class / cssClass.
@@ -118,14 +115,6 @@ def element_classes(el: Any) -> List[str]:
             seen.add(token)
             out.append(token)
     return out
-
-
-def looks_like_html(text: str) -> bool:
-    head = (text or "")[:4000].lower()
-    if "<" not in head:
-        return False
-    markers = ("<div", "<html", "<span", "<button", "<h1", "<h2", "<p", "class=", "widget")
-    return any(m in head for m in markers)
 
 
 def is_skin_modifier(cls: str) -> bool:
@@ -251,39 +240,6 @@ def maybe_truncate_to_first_widget(html: str) -> Tuple[str, Optional[str]]:
     )
 
 
-def read_html_path(path_str: str) -> Tuple[Optional[str], Optional[str]]:
-    """Read a server-side outerHTML file. Returns (html, error)."""
-    raw = (path_str or "").strip()
-    if not raw:
-        return None, "html_path is empty."
-    path = Path(raw).expanduser()
-    try:
-        path = path.resolve()
-    except OSError as exc:
-        return None, f"html_path could not be resolved: {exc}."
-    if not path.is_file():
-        return None, f"html_path is not a file: {path}."
-    try:
-        size = path.stat().st_size
-    except OSError as exc:
-        return None, f"html_path could not be read: {exc}."
-    if size > MAX_HTML_PATH_BYTES:
-        return None, (
-            f"html_path is too large ({size} bytes). "
-            "Pass a widget outerHTML file, not an unrelated dump."
-        )
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        return None, f"html_path could not be read: {exc}."
-    if not looks_like_html(text):
-        return None, (
-            "html_path does not look like HTML outerHTML. "
-            "This tool only reads a saved widget or page DOM file."
-        )
-    return text, None
-
-
 def _append_group(lines: List[str], title: str, items: List[str]) -> None:
     if not items:
         return
@@ -369,10 +325,16 @@ async def fetch_page_html(url: str) -> Tuple[str, str]:
         return str(resp.url), text
 
 
+NO_FILESYSTEM_PATH_MESSAGE = (
+    "Paste outerHTML into html=. "
+    "Do not pass a local filesystem path — this server cannot read the caller's disk."
+)
+
+
 def _missing_input_message() -> str:
     return (
-        "Provide html (pasted outerHTML), html_path (server-side outerHTML file), "
-        "and/or url (`/bot/home` — GET is login/SPA only). "
+        f"{NO_FILESYSTEM_PATH_MESSAGE} "
+        "Optional url (`/bot/home`) is GET only (login/SPA). "
         "Also pass content_id or site_id for RBAC (same as inspect)."
     )
 
@@ -380,37 +342,22 @@ def _missing_input_message() -> str:
 async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     user_email = (arguments.get("user_email") or "").strip() if isinstance(arguments.get("user_email"), str) else ""
     html = arguments.get("html") if isinstance(arguments.get("html"), str) else ""
-    html_path = (arguments.get("html_path") or "").strip() if isinstance(arguments.get("html_path"), str) else ""
     url = (arguments.get("url") or "").strip() if isinstance(arguments.get("url"), str) else ""
+    stray_path = arguments.get("html_path") if isinstance(arguments.get("html_path"), str) else ""
 
     if not user_email:
         return {"content": [{"type": "text", "text": "user_email is required."}]}
-    if not html.strip() and not html_path and not url:
+    if stray_path.strip() and not html.strip():
+        return {"content": [{"type": "text", "text": NO_FILESYSTEM_PATH_MESSAGE}]}
+    if html.strip() and "<" not in html and ("/" in html or "\\" in html):
+        return {"content": [{"type": "text", "text": NO_FILESYSTEM_PATH_MESSAGE}]}
+    if not html.strip() and not url:
         return {"content": [{"type": "text", "text": _missing_input_message()}]}
 
-    logger.info(
-        "Executing inspect_front_html url=%s html_len=%s html_path=%s",
-        url or None,
-        len(html or ""),
-        html_path or None,
-    )
+    logger.info("Executing inspect_front_html url=%s html_len=%s", url or None, len(html or ""))
 
     if html.strip():
         text = format_front_report(source="pasted html", html=html)
-        return {"content": [{"type": "text", "text": text}]}
-
-    if html_path:
-        body, err = read_html_path(html_path)
-        if err or body is None:
-            return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"{err} Paste outerHTML into html= instead.",
-                    }
-                ]
-            }
-        text = format_front_report(source="html_path", html=body)
         return {"content": [{"type": "text", "text": text}]}
 
     try:

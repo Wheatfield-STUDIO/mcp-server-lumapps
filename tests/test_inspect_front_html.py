@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Fixture-based tests for inspect_front_html (pasted DOM / html_path / SSR GET, no Playwright)."""
+"""Fixture-based tests for inspect_front_html (pasted DOM / SSR GET, no Playwright)."""
 
 import asyncio
 from pathlib import Path
@@ -20,14 +20,15 @@ from unittest.mock import patch
 
 from app.tools.inspect_front_html import (
     LARGE_HTML_CHARS,
+    NO_FILESYSTEM_PATH_MESSAGE,
     SPA_DISCLAIMER,
+    TOOL_SCHEMA,
     collect_dom,
     format_front_report,
     handle,
     has_lumx,
     looks_like_spa_shell,
     maybe_truncate_to_first_widget,
-    read_html_path,
     resolve_page_url,
 )
 from app.tools.update_global_css import TOOL_SCHEMA as CSS_TOOL_SCHEMA
@@ -135,35 +136,44 @@ def test_handle_pasted_html() -> None:
     assert "skin: .grok-home-news → .widget--grok-home-news" in text
 
 
-def test_handle_html_path(tmp_path: Path) -> None:
-    path = tmp_path / "news-widget.html"
-    path.write_text(FIXTURE_WIDGET_HTML, encoding="utf-8")
+def test_schema_has_no_html_path() -> None:
+    props = TOOL_SCHEMA["inputSchema"]["properties"]
+    assert "html_path" not in props
+    html_desc = props["html"]["description"]
+    assert "filesystem path" in html_desc.lower() or "local filesystem" in html_desc.lower()
+    assert "Paste" in html_desc or "outerHTML" in html_desc
+    assert "html_path" not in TOOL_SCHEMA["description"]
+
+
+def test_handle_html_path_is_rejected() -> None:
     result = asyncio.run(
         handle(
             {
                 "user_email": "dev@example.com",
                 "content_id": "5686867710165115",
-                "html_path": str(path),
+                "html_path": "/workspace/news-widget.html",
             }
         )
     )
     text = result["content"][0]["text"]
-    assert "source: html_path" in text
-    assert ".lumx-button" in text
-    assert "skin: .grok-home-news → .widget--grok-home-news" in text
+    assert "not a file" not in text
+    assert "Paste outerHTML" in text
+    assert "cannot read" in text
+    assert "source: html_path" not in text
 
 
-def test_html_path_rejects_non_html(tmp_path: Path) -> None:
-    path = tmp_path / "notes.txt"
-    path.write_text("not markup at all", encoding="utf-8")
-    html, err = read_html_path(str(path))
-    assert html is None
-    assert err is not None
-    assert "does not look like HTML" in err
+def test_handle_path_string_as_html_is_rejected() -> None:
     result = asyncio.run(
-        handle({"user_email": "dev@example.com", "html_path": str(path)})
+        handle(
+            {
+                "user_email": "dev@example.com",
+                "html": "/workspace/news-widget.html",
+            }
+        )
     )
-    assert "does not look like HTML" in result["content"][0]["text"]
+    text = result["content"][0]["text"]
+    assert text == NO_FILESYSTEM_PATH_MESSAGE
+    assert "not a file" not in text
 
 
 def test_truncate_to_first_widget() -> None:
