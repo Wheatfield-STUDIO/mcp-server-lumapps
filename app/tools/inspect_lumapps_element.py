@@ -41,11 +41,11 @@ TOOL_SCHEMA = {
         "Use content_id + user_email for a page (layout v2 + content.template). "
         "Use site_id + user_email for the site theme. "
         "One line per widget. 'use this id for writes' is the content.template uuid "
-        "(layout widgetId is shown as layoutId and is accepted via map). "
-        "Dumps widgetType, properties.settings, properties.class (→ widget-- prefix) vs "
-        "properties.widgetClass (Advanced classes), identifier, directory id, "
-        "content-list cover/thumbnail/footer, and parent row/cell/width. "
-        "Set full=true to return complete custom CSS (default false truncates at 8000 chars). "
+        "(layoutId is also accepted via map). "
+        "live CSS is .widget--{properties.class} (LumApps BEM on .widget; see lumapps-css-variables). "
+        "properties.widgetClass is extra classes, not the widget-- hook. "
+        "cover / thumbnail-in-background / footer link are always printed (or 'unset'). "
+        "Set full=true for complete custom CSS. Set verbose=true for both component trees. "
         "No browser; works via API. Use the result to prepare a safe write "
         "(update_widget_settings, update_widget_style, update_site_theme, update_global_css). "
         "This tool is read-only: no Yes/Confirm is required."
@@ -69,6 +69,10 @@ TOOL_SCHEMA = {
                 "type": "boolean",
                 "description": "If true, do not truncate custom CSS (default false, 8000-char excerpt).",
             },
+            "verbose": {
+                "type": "boolean",
+                "description": "If true, print both layout.components and content.template.components trees. Default: one tree (template if present, else layout).",
+            },
         },
         "required": [],
     },
@@ -78,8 +82,8 @@ MAX_CSS_EXCERPT = 8000
 
 _ADVANCED_CLASS_KEYS = ("class", "widgetClass", "identifier", "classes", "classNames")
 _ADVANCED_FIELD_NOTES = {
-    "class": "becomes CSS prefix widget--{value} (Advanced class, e.g. grok-home-news → widget--grok-home-news)",
-    "widgetClass": "Advanced classes (comma-separated, e.g. grok-news, grok-pills) — not the widget-- prefix",
+    "class": "Advanced class → live CSS .widget--{value}",
+    "widgetClass": "extra classes (e.g. grok-news, grok-pills) — not the .widget-- hook",
     "identifier": "Advanced identifier",
     "classes": "extra classes",
     "classNames": "classNames",
@@ -117,25 +121,58 @@ def _linked_directory_id(props: Dict[str, Any], settings: Any) -> Optional[str]:
     return None
 
 
-def _content_list_visuals(props: Dict[str, Any], settings: Any) -> List[str]:
-    """Call out cover / thumbnail background / high-res when present."""
-    lines: List[str] = []
+def _fmt_or_unset(value: Any) -> str:
+    if value is None:
+        return "unset"
+    if isinstance(value, str) and not value.strip():
+        return "unset"
+    return json.dumps(value)
+
+
+def _cover_value(props: Dict[str, Any], settings: Any) -> Any:
     bag = settings if isinstance(settings, dict) else {}
     props = props if isinstance(props, dict) else {}
-    cover = bag.get("cover") or bag.get("coverImage") or props.get("cover") or props.get("coverImage")
-    if cover is not None:
-        lines.append(f"      content-list cover: {json.dumps(cover)}")
-    thumb = (
-        bag.get("thumbnailBackground")
-        or bag.get("thumbnail")
-        or bag.get("backgroundImage")
-        or props.get("thumbnail")
-    )
-    if thumb is not None:
-        lines.append(f"      content-list thumbnail background: {json.dumps(thumb)}")
-    if bag.get("isHighResolution") is not None:
-        lines.append(f"      content-list isHighResolution: {json.dumps(bag.get('isHighResolution'))}")
-    return lines
+    for src in (bag, props):
+        for key in ("cover", "coverImage"):
+            if src.get(key) is not None:
+                return src.get(key)
+    return None
+
+
+def _thumbnail_in_background_value(props: Dict[str, Any], settings: Any) -> Any:
+    bag = settings if isinstance(settings, dict) else {}
+    props = props if isinstance(props, dict) else {}
+    for src in (bag, props):
+        for key in ("thumbnailBackground", "thumbnail", "backgroundImage"):
+            if src.get(key) is not None:
+                return src.get(key)
+    return None
+
+
+def _widget_live_css(props: Dict[str, Any]) -> str:
+    """
+    Live selector the LumApps front applies on the widget root.
+    Repo resource lumapps-css-variables.md uses BEM .widget--* on .widget.
+    The Advanced field stored as properties.class is that modifier (e.g. grok-home-news → .widget--grok-home-news).
+    properties.widgetClass is a separate extra-class list and is not prefixed.
+    """
+    raw = props.get("class") if isinstance(props, dict) else None
+    if raw is None or (isinstance(raw, str) and not str(raw).strip()):
+        return "live CSS: unset (no properties.class → no .widget-- hook)"
+    token = str(raw).strip().replace(",", " ").split()[0]
+    if not token:
+        return "live CSS: unset (no properties.class → no .widget-- hook)"
+    return f"live CSS: .widget--{token}"
+
+
+def _visual_always_lines(props: Dict[str, Any], settings: Any) -> List[str]:
+    """Always print cover / thumbnail-in-background / footer link (or unset)."""
+    footer = _extract_footer(props, settings)
+    return [
+        f"      cover: {_fmt_or_unset(_cover_value(props, settings))}",
+        f"      thumbnail-in-background: {_fmt_or_unset(_thumbnail_in_background_value(props, settings))}",
+        f"      footer link: {_fmt_or_unset(footer)}",
+    ]
 
 
 def _extract_footer(props: Dict[str, Any], settings: Any) -> Optional[Dict[str, Any]]:
@@ -197,7 +234,7 @@ def _format_widget_identity_label(
     if write_id:
         parts = [f"use this id for writes: {write_id}"]
         if layout_ids:
-            parts.append(f"layoutId: {layout_ids[0]} (accepted via map, not writable alone)")
+            parts.append(f"layoutId: {layout_ids[0]} (also accepted via map)")
         return ", ".join(parts)
     fallback = layout_ids[0] if layout_ids else (_nonempty_id(widget_id) or "—")
     return f"layout-only / readOnly id: {fallback} — not writable via update_widget_settings"
@@ -245,17 +282,16 @@ def _format_widget_entry(
             suffix = f"  [{note}]" if note else ""
             lines.append(f"      properties.{key}: {props.get(key)!r}{suffix}")
 
-    footer = _extract_footer(props, settings)
-    if footer:
-        lines.append(f"      footer link: {json.dumps(footer)}")
+    lines.append(f"      {_widget_live_css(props)}")
+    lines.extend(_visual_always_lines(props, settings))
 
     w_type_norm = (w_type or "").strip().lower()
     if "directory" in w_type_norm:
         dir_id = _linked_directory_id(props, settings)
         if dir_id:
             lines.append(f"      linked directory id: {dir_id}")
-    if w_type_norm in ("content-list", "content_list", "contentlist"):
-        lines.extend(_content_list_visuals(props, settings))
+        else:
+            lines.append("      linked directory id: unset")
 
     if parent:
         lines.append(
@@ -291,6 +327,8 @@ def _collect_page_widgets(
 def _format_layout_response(
     layout: Dict[str, Any],
     content: Optional[Dict[str, Any]] = None,
+    *,
+    verbose: bool = False,
 ) -> str:
     """Format layout API + content.template for human/AI reading."""
     lines = [
@@ -327,14 +365,21 @@ def _format_layout_response(
         lines.append("")
 
     layout_components = layout.get("components") or []
-    if layout_components:
-        lines.append("--- Structure (layout.components, full IDs) ---")
-        lines.append(_summary_components(layout_components, indent=0))
     template_components = template.get("components") or []
-    if template_components:
-        lines.append("")
+    if verbose:
+        if layout_components:
+            lines.append("--- Structure (layout.components, full IDs) ---")
+            lines.append(_summary_components(layout_components, indent=0))
+        if template_components:
+            lines.append("")
+            lines.append("--- Structure (content.template.components, full IDs) ---")
+            lines.append(_summary_components(template_components, indent=0))
+    elif template_components:
         lines.append("--- Structure (content.template.components, full IDs) ---")
         lines.append(_summary_components(template_components, indent=0))
+    elif layout_components:
+        lines.append("--- Structure (layout.components, full IDs) ---")
+        lines.append(_summary_components(layout_components, indent=0))
     return "\n".join(lines).strip()
 
 
@@ -489,6 +534,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     site_id = arguments.get("site_id")
     user_email = arguments.get("user_email")
     full = bool(arguments.get("full"))
+    verbose = bool(arguments.get("verbose"))
 
     if not user_email:
         return {
@@ -510,7 +556,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
                 content = await lumapps_client.get_content(content_id, token=token)
             except Exception as e:
                 logger.warning("inspect_lumapps_element get_content failed (layout-only fallback): %s", e)
-            text = _format_layout_response(layout, content)
+            text = _format_layout_response(layout, content, verbose=verbose)
             return {"content": [{"type": "text", "text": text}]}
         except Exception as e:
             logger.exception("inspect_lumapps_element layout API failed")

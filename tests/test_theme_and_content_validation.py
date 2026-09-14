@@ -24,6 +24,7 @@ from app.tools.inspect_lumapps_element import (
     _format_style_response,
     _format_widget_entry,
     _summary_components,
+    _widget_live_css,
     find_slideshow_paths,
 )
 from app.tools.save_content_page import apply_featured_image
@@ -119,7 +120,11 @@ def test_inspect_widget_and_full_css_flag() -> None:
     assert "width=12" in blob
     assert FULL_TEMPLATE_UUID in blob
     assert "use this id for writes" in blob
-    assert "widget--" in blob or "Advanced" in blob
+    assert "live CSS: unset" in blob
+    assert "live CSS: .widget--image-arrondie" not in blob
+    assert "cover: unset" in blob
+    assert "thumbnail-in-background: unset" in blob
+    assert "footer link:" in blob
 
     long_css = "x" * (MAX_CSS_EXCERPT + 50)
     truncated = _format_style_response(
@@ -206,6 +211,15 @@ def test_inspect_returns_full_widget_ids_not_truncated() -> None:
     assert "id=" + FULL_WIDGET_ID[:8] + "..." not in tree
     assert "..." not in tree
     assert "use this id for writes: " + FULL_TEMPLATE_UUID in text
+    assert "also accepted via map" in text
+    assert "not writable alone" not in text
+    assert text.count("--- Structure") == 1
+    assert "content.template.components" in text
+    assert "--- Structure (layout.components, full IDs) ---" not in text
+    verbose = _format_layout_response(layout, content, verbose=True)
+    assert verbose.count("--- Structure") == 2
+    assert "--- Structure (layout.components, full IDs) ---" in verbose
+    assert "--- Structure (content.template.components, full IDs) ---" in verbose
 
 
 def test_inspect_dumps_template_only_widget_settings() -> None:
@@ -281,10 +295,16 @@ def test_inspect_dumps_template_only_widget_settings() -> None:
     assert "content.template.components" in text
     assert "use this id for writes" in text
     assert "properties.class" in text
-    assert "widget--grok-home-news" in text or "widget--" in text
+    assert "live CSS: .widget--grok-home-news" in text
+    assert "live CSS: .widget--image-arrondie" not in text
     assert "properties.widgetClass" in text
-    assert "content-list cover" in text
-    assert "thumbnail background" in text
+    assert 'cover: "media-cover-1"' in text
+    assert 'thumbnail-in-background: "#f0f1f5"' in text
+    assert text.count("cover: unset") >= 1
+    assert text.count("thumbnail-in-background: unset") >= 1
+    assert text.count("footer link: unset") >= 1
+    assert "not writable alone" not in text
+    assert text.count("--- Structure") == 1
 
 
 def test_inspect_unique_widget_count_pairs_layout_and_template() -> None:
@@ -324,11 +344,29 @@ def test_inspect_unique_widget_count_pairs_layout_and_template() -> None:
     assert text.count("  • ") == 5
     assert text.count("use this id for writes:") == 5
     assert "use this id for writes: 1d06350f-aaaa-bbbb-cccc-ddddeeeeffff" in text
-    assert "layoutId: 031d03b3-1111-2222-3333-444455556666" in text
+    assert "layoutId: 031d03b3-1111-2222-3333-444455556666 (also accepted via map)" in text
     assert "use this id for writes: cb986a70-aaaa-bbbb-cccc-ddddeeeeffff" in text
-    assert "layoutId: 42d2a09e-1111-2222-3333-444455556666" in text
-    assert "widget--" in text
+    assert "layoutId: 42d2a09e-1111-2222-3333-444455556666 (also accepted via map)" in text
+    assert "not writable alone" not in text
+    assert "live CSS: .widget--grok-home-news" in text
+    assert text.count("cover: unset") == 5
+    assert text.count("thumbnail-in-background: unset") == 5
+    assert text.count("footer link: unset") == 5
+    assert text.count("--- Structure") == 1
+    assert "content.template.components" in text
+    assert "--- Structure (layout.components, full IDs) ---" not in text
     assert "8821612211991448" in text
+
+
+def test_inspect_live_css_uses_properties_class_not_widget_class() -> None:
+    """LumApps BEM hook is .widget--{properties.class}, not widgetClass."""
+    assert _widget_live_css({"class": "grok-home-news", "widgetClass": "grok-news, grok-pills"}) == (
+        "live CSS: .widget--grok-home-news"
+    )
+    assert _widget_live_css({"widgetClass": "grok-news, grok-pills"}) == (
+        "live CSS: unset (no properties.class → no .widget-- hook)"
+    )
+    assert _widget_live_css({}) == "live CSS: unset (no properties.class → no .widget-- hook)"
 
 
 def test_featured_image_media_id_only() -> None:
