@@ -43,12 +43,14 @@ TOOL_SCHEMA = {
         "Use site_id + user_email for the site theme. "
         "One line per widget. 'use this id for writes' is the content.template uuid "
         "(layoutId is also accepted via map). "
-        "live CSS is unknown: repo resources do not map Advanced 'Widget classes' to "
-        "properties.class vs properties.widgetClass, nor to .widget-- "
-        "(lumapps-css-variables only documents product BEM .widget--has-ungrouped-container-block). "
-        "cover / thumbnail-in-background / footer link only on content-list (or unset); "
-        "footer link also on directory when that field exists. "
+        "live CSS is unknown: /bot content/save has both properties.class (single token) and "
+        "properties.widgetClass (comma list); repo does not map either to .widget--. "
+        "content-list dumps thumbnailPosition / uncompressedThumbnail (not 'cover'). "
+        "Inspect properties.settings plus sibling keys the BO saved (viewMode, perLine, …). "
+        "Footer link is unset only when that field is absent. "
+        "Parent prints template row uuid / cell uuid when present. "
         "Empty properties.style is omitted unless verbose=true. "
+        "Writes are content/save (HAR); widget blocks is a post-save render, not used here. "
         "Set full=true for complete custom CSS. Set verbose=true for both component trees "
         "and empty style dumps. "
         "No browser; works via API. Use the result to prepare a safe write "
@@ -87,12 +89,45 @@ MAX_CSS_EXCERPT = 8000
 
 _ADVANCED_CLASS_KEYS = ("class", "widgetClass", "identifier", "classes", "classNames")
 _ADVANCED_FIELD_NOTES = {
-    "class": "payload field; Advanced UI mapping unknown — not proven as .widget-- hook",
-    "widgetClass": "this server treats as Advanced classes; UI \"Widget classes\" mapping unconfirmed",
-    "identifier": "Advanced identifier",
+    "class": "single token (content/save payload)",
+    "widgetClass": "comma list (content/save payload)",
+    "identifier": "identifier (content/save payload)",
     "classes": "extra classes",
     "classNames": "classNames",
 }
+
+# Sibling keys observed on /bot content/save template widgets (HAR 2026-09-14).
+_SIBLING_KEYS = (
+    "viewMode",
+    "viewModeVariant",
+    "perLine",
+    "thumbnailPosition",
+    "uncompressedThumbnail",
+    "directory",
+    "customContentType",
+    "fields",
+    "imageFormat",
+    "content",
+    "type",
+    "listOrder",
+    "listOrderDir",
+    "truncate",
+    "fullExcerpt",
+)
+_CONTENT_LIST_ALWAYS = ("thumbnailPosition", "uncompressedThumbnail")
+_PROPS_ALREADY_SHOWN = frozenset(
+    {
+        "style",
+        "settings",
+        "class",
+        "widgetClass",
+        "identifier",
+        "classes",
+        "classNames",
+        "footer",
+        "footerLink",
+    }
+)
 
 
 def _flatten_style(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -121,6 +156,8 @@ def _linked_directory_id(props: Dict[str, Any], settings: Any) -> Optional[str]:
             val = bag.get(key)
             if isinstance(val, dict):
                 val = val.get("uid") or val.get("id") or val.get("directory")
+            if isinstance(val, list):
+                val = val[0] if val else None
             if val is not None and str(val).strip():
                 return str(val).strip()
     return None
@@ -132,26 +169,6 @@ def _fmt_or_unset(value: Any) -> str:
     if isinstance(value, str) and not value.strip():
         return "unset"
     return json.dumps(value)
-
-
-def _cover_value(props: Dict[str, Any], settings: Any) -> Any:
-    bag = settings if isinstance(settings, dict) else {}
-    props = props if isinstance(props, dict) else {}
-    for src in (bag, props):
-        for key in ("cover", "coverImage"):
-            if src.get(key) is not None:
-                return src.get(key)
-    return None
-
-
-def _thumbnail_in_background_value(props: Dict[str, Any], settings: Any) -> Any:
-    bag = settings if isinstance(settings, dict) else {}
-    props = props if isinstance(props, dict) else {}
-    for src in (bag, props):
-        for key in ("thumbnailBackground", "thumbnail", "backgroundImage"):
-            if src.get(key) is not None:
-                return src.get(key)
-    return None
 
 
 def _nonempty_class_token(value: Any) -> Optional[str]:
@@ -181,10 +198,9 @@ def _widget_live_css(props: Dict[str, Any]) -> Optional[str]:
     if wclass:
         bits.append(f"widgetClass={wclass}")
     return (
-        "live CSS: unknown — Advanced \"Widget classes\" → class vs widgetClass "
-        "is not in repo resources; .widget-- is only documented as product BEM "
-        f"(.widget--has-ungrouped-container-block). {'; '.join(bits)} "
-        "— do not assume .widget--{class} or .widget--{widgetClass}"
+        "live CSS: unknown — /bot content/save has class (single) and widgetClass "
+        "(comma list); no HAR/docs quote that the front prefixes .widget--. "
+        f"{'; '.join(bits)} — do not assume .widget--{{class}} or .widget--{{widgetClass}}"
     )
 
 
@@ -200,17 +216,34 @@ def _is_empty_style(value: Any) -> bool:
     return False
 
 
+def _sibling_property_lines(w_type: str, props: Dict[str, Any], settings: Any) -> List[str]:
+    """Dump BO sibling keys from content/save (not just properties.settings)."""
+    props = props if isinstance(props, dict) else {}
+    nt = normalize_widget_type(w_type)
+    lines: List[str] = []
+    shown: set = set()
+    keys = list(_SIBLING_KEYS)
+    if nt == "content-list":
+        for key in _CONTENT_LIST_ALWAYS:
+            if key not in keys:
+                keys.append(key)
+    for key in keys:
+        if key in _PROPS_ALREADY_SHOWN:
+            continue
+        if key in props:
+            lines.append(f"      properties.{key}: {json.dumps(props[key])}")
+            shown.add(key)
+        elif nt == "content-list" and key in _CONTENT_LIST_ALWAYS:
+            lines.append(f"      properties.{key}: unset")
+            shown.add(key)
+    return lines
+
+
 def _visual_lines(w_type: str, props: Dict[str, Any], settings: Any) -> List[str]:
-    """Cover / thumbnail / footer only on content-list. Footer also on directory when present."""
+    """Footer only when the widget type can have it; unset means the field is absent."""
     nt = normalize_widget_type(w_type)
     footer = _extract_footer(props, settings)
-    if nt == "content-list":
-        return [
-            f"      cover: {_fmt_or_unset(_cover_value(props, settings))}",
-            f"      thumbnail-in-background: {_fmt_or_unset(_thumbnail_in_background_value(props, settings))}",
-            f"      footer link: {_fmt_or_unset(footer)}",
-        ]
-    if "directory" in nt and footer is not None:
+    if nt == "content-list" or "directory" in nt:
         return [f"      footer link: {_fmt_or_unset(footer)}"]
     return []
 
@@ -318,6 +351,7 @@ def _format_widget_entry(
     settings = props.get("settings")
     if settings is not None:
         lines.append(f"      properties.settings: {json.dumps(settings)}")
+    lines.extend(_sibling_property_lines(w_type, props, settings))
 
     for key in _ADVANCED_CLASS_KEYS:
         if props.get(key) is not None:
@@ -345,9 +379,9 @@ def _format_widget_entry(
             f"width={parent.get('width')}",
         ]
         if parent.get("rowId"):
-            bits.append(f"rowId={parent['rowId']}")
+            bits.append(f"row uuid={parent['rowId']}")
         if parent.get("cellId"):
-            bits.append(f"cellId={parent['cellId']}")
+            bits.append(f"cell uuid={parent['cellId']}")
         lines.append(f"      parent: {' '.join(bits)}")
     return lines
 
@@ -358,13 +392,22 @@ def _parent_for_widget(
     template_widget: Optional[Dict[str, Any]],
     raw: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    for node in (raw, template_widget):
+    """Prefer template parent (row/cell uuid live there on /bot content/save)."""
+    candidates: List[Dict[str, Any]] = []
+    for node in (template_widget, raw):
         for tid in widget_identity_ids(node):
             if tid in parents:
-                return parents[tid]
+                candidates.append(parents[tid])
     if widget_id in parents:
-        return parents[widget_id]
-    return None
+        candidates.append(parents[widget_id])
+    if not candidates:
+        return None
+    out = dict(candidates[0])
+    for rec in candidates[1:]:
+        for key in ("rowId", "cellId", "width", "row", "cell"):
+            if out.get(key) in (None, "") and rec.get(key) not in (None, ""):
+                out[key] = rec[key]
+    return out
 
 
 def _collect_page_widgets(
@@ -396,7 +439,7 @@ def _format_layout_response(
     template = (content or {}).get("template") or {}
     layout_parents = index_widget_parents(layout.get("components") or [])
     template_parents = index_widget_parents(template.get("components") or [])
-    parents = {**template_parents, **layout_parents}
+    parents = {**layout_parents, **template_parents}
 
     page_widgets = _collect_page_widgets(layout, content)
     if not page_widgets:

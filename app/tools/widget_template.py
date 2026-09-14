@@ -381,7 +381,19 @@ def pick_settings_highlights(widget: Dict[str, Any], limit: int = 6) -> Dict[str
     props = widget.get("properties") if isinstance(widget.get("properties"), dict) else {}
     settings = props.get("settings") if isinstance(props.get("settings"), dict) else {}
     out: Dict[str, Any] = {}
-    for key in ("widgetClass", "identifier", "classes", "classNames"):
+    for key in (
+        "class",
+        "widgetClass",
+        "identifier",
+        "classes",
+        "classNames",
+        "thumbnailPosition",
+        "uncompressedThumbnail",
+        "viewMode",
+        "perLine",
+        "viewModeVariant",
+        "directory",
+    ):
         if props.get(key) is not None:
             out[key] = props.get(key)
     preferred = (

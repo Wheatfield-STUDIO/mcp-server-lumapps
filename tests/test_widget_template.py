@@ -113,6 +113,21 @@ def test_pick_settings_highlights() -> None:
     highlights = pick_settings_highlights(widget)
     assert highlights["widgetClass"] == "grok-news"
     assert "settings.viewMode" in highlights
+    with_siblings = pick_settings_highlights(
+        {
+            "properties": {
+                "class": "grok-home-news",
+                "widgetClass": "grok-news, grok-pills",
+                "thumbnailPosition": "background",
+                "uncompressedThumbnail": True,
+                "perLine": 3,
+                "settings": {"viewMode": "horizontal"},
+            }
+        }
+    )
+    assert with_siblings["class"] == "grok-home-news"
+    assert with_siblings["thumbnailPosition"] == "background"
+    assert with_siblings["perLine"] == 3
 
 
 TEMPLATE_ONLY_UUID = "031d03b3-aaaa-bbbb-cccc-ddddeeeeffff"

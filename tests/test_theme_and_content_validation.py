@@ -125,8 +125,9 @@ def test_inspect_widget_and_full_css_flag() -> None:
     assert "live CSS: unknown" in blob
     assert "widgetClass=image-arrondie, pilules-meta, newsbar" in blob
     assert "live CSS: .widget--image-arrondie" not in blob
-    assert "cover: unset" in blob
-    assert "thumbnail-in-background: unset" in blob
+    assert "properties.thumbnailPosition: unset" in blob
+    assert "properties.uncompressedThumbnail: unset" in blob
+    assert "cover: unset" not in blob
     assert "footer link:" in blob
 
     long_css = "x" * (MAX_CSS_EXCERPT + 50)
@@ -244,9 +245,11 @@ def test_inspect_dumps_template_only_widget_settings() -> None:
             "components": [
                 {
                     "type": "row",
+                    "uuid": "a6d71d4a-af04-11f1-b622-1aea6a5aa721",
                     "cells": [
                         {
                             "type": "cell",
+                            "uuid": "a6d71c6e-af04-11f1-b622-1aea6a5aa721",
                             "width": 8,
                             "components": [
                                 {
@@ -255,17 +258,19 @@ def test_inspect_dumps_template_only_widget_settings() -> None:
                                     "uuid": list_uuid,
                                     "properties": {
                                         "class": "grok-home-news",
-                                        "widgetClass": "image-arrondie, pilules-meta",
+                                        "widgetClass": "grok-news, grok-pills",
                                         "style": {"content": {}, "main": {}},
                                         "identifier": "home-news",
+                                        "thumbnailPosition": "background",
+                                        "uncompressedThumbnail": True,
+                                        "viewMode": "horizontal",
+                                        "perLine": 3,
                                         "settings": {
                                             "viewMode": "horizontal",
                                             "itemsPerLine": 3,
                                             "types": ["news"],
                                             "fields": {"title": True},
                                             "isHighResolution": True,
-                                            "cover": "media-cover-1",
-                                            "thumbnailBackground": "#f0f1f5",
                                         },
                                     },
                                 },
@@ -274,8 +279,11 @@ def test_inspect_dumps_template_only_widget_settings() -> None:
                                     "widgetType": "directory-entry",
                                     "uuid": dir_uuid,
                                     "properties": {
-                                        "identifier": "key-refs",
-                                        "settings": {"displayMode": "catalogue", "directory": "8821612211991448"},
+                                        "class": "grok-home-links",
+                                        "widgetClass": "grok-links",
+                                        "identifier": "home-links",
+                                        "directory": ["8821612211991448"],
+                                        "settings": {"displayMode": "catalogue"},
                                     },
                                 },
                             ],
@@ -292,7 +300,7 @@ def test_inspect_dumps_template_only_widget_settings() -> None:
     assert "42d2a09e..." not in text
     assert "viewMode" in text
     assert "itemsPerLine" in text
-    assert "image-arrondie, pilules-meta" in text
+    assert "grok-news, grok-pills" in text
     assert "displayMode" in text
     assert "8821612211991448" in text
     assert "linked directory id" in text
@@ -302,16 +310,18 @@ def test_inspect_dumps_template_only_widget_settings() -> None:
     assert "properties.class" in text
     assert "live CSS: unknown" in text
     assert "class=grok-home-news" in text
-    assert "widgetClass=image-arrondie, pilules-meta" in text
+    assert "widgetClass=grok-news, grok-pills" in text
     assert "live CSS: .widget--grok-home-news" not in text
     assert "properties.widgetClass" in text
-    assert 'cover: "media-cover-1"' in text
-    assert 'thumbnail-in-background: "#f0f1f5"' in text
-    assert "footer link: unset" in text
-    title_and_dir_have_no_cover = text.count("cover:") == 1
-    assert title_and_dir_have_no_cover
+    assert 'properties.thumbnailPosition: "background"' in text
+    assert "properties.uncompressedThumbnail: true" in text
+    assert "properties.perLine: 3" in text
+    assert "properties.viewMode: " in text
     assert "cover: unset" not in text
-    assert text.count("thumbnail-in-background:") == 1
+    assert "thumbnail-in-background" not in text
+    assert "footer link: unset" in text
+    assert "row uuid=a6d71d4a-af04-11f1-b622-1aea6a5aa721" in text
+    assert "cell uuid=a6d71c6e-af04-11f1-b622-1aea6a5aa721" in text
     assert "not writable alone" not in text
     assert text.count("--- Structure") == 1
     assert "properties.style" not in text
@@ -344,17 +354,27 @@ def test_inspect_unique_widget_count_pairs_layout_and_template() -> None:
                     "type": "widget",
                     "widgetType": "content-list",
                     "uuid": "1d06350f-aaaa-bbbb-cccc-ddddeeeeffff",
-                    "properties": {"settings": {"viewMode": "horizontal"}, "class": "grok-home-news"},
+                    "properties": {
+                        "class": "grok-home-news",
+                        "widgetClass": "grok-news, grok-pills",
+                        "thumbnailPosition": "background",
+                        "uncompressedThumbnail": True,
+                        "viewMode": "horizontal",
+                        "perLine": 3,
+                        "settings": {"viewMode": "horizontal"},
+                    },
                 },
                 {
                     "type": "widget",
                     "widgetType": "directory-entry",
                     "uuid": "cb986a70-aaaa-bbbb-cccc-ddddeeeeffff",
                     "properties": {
-                        "settings": {
-                            "directory": "8821612211991448",
-                            "footer": {"label": "All people", "href": "/dir"},
-                        }
+                        "class": "grok-home-links",
+                        "widgetClass": "grok-links",
+                        "directory": ["8821612211991448"],
+                        "viewMode": "list",
+                        "viewModeVariant": "group",
+                        "settings": {"displayMode": "catalogue"},
                     },
                 },
             ]
@@ -370,24 +390,24 @@ def test_inspect_unique_widget_count_pairs_layout_and_template() -> None:
     assert "not writable alone" not in text
     assert "live CSS: unknown" in text
     assert "class=grok-home-news" in text
+    assert "widgetClass=grok-news, grok-pills" in text
     assert "live CSS: .widget--grok-home-news" not in text
-    assert text.count("cover:") == 1
-    assert text.count("cover: unset") == 1
-    assert text.count("thumbnail-in-background: unset") == 1
-    assert text.count("footer link: unset") == 1
-    assert "All people" in text
+    assert 'properties.thumbnailPosition: "background"' in text
+    assert "properties.uncompressedThumbnail: true" in text
+    assert "cover: unset" not in text
+    assert "thumbnail-in-background" not in text
+    assert text.count("footer link: unset") == 2
     assert "properties.style" not in text
     title_block = text.split("  • 'html'")[0]
-    assert "cover:" not in title_block
+    assert "thumbnailPosition" not in title_block
     html_block = text.split("  • 'html'")[1].split("  • ")[0]
-    assert "cover:" not in html_block
-    assert "thumbnail-in-background:" not in html_block
     assert "footer link:" not in html_block
     hero_block = text.split("  • 'featured-image'")[1].split("  • ")[0]
-    assert "cover:" not in hero_block
+    assert "footer link:" not in hero_block
     dir_block = text.split("  • 'directory-entry'")[1]
-    assert "cover:" not in dir_block
-    assert "footer link:" in dir_block
+    assert "footer link: unset" in dir_block
+    assert 'properties.directory: ["8821612211991448"]' in text
+    assert "properties.viewModeVariant" in text
     assert text.count("--- Structure") == 1
     assert "content.template.components" in text
     assert "--- Structure (layout.components, full IDs) ---" not in text
@@ -467,8 +487,139 @@ def test_inspect_parent_prints_real_row_cell_id_when_present() -> None:
         parent=parents["t-title"],
     )
     blob = "\n".join(lines)
-    assert "rowId=row-real-id" in blob
-    assert "cellId=cell-real-id" in blob
+    assert "row uuid=row-real-id" in blob
+    assert "cell uuid=cell-real-id" in blob
+
+
+def test_inspect_bot_home_content_save_ground_truth() -> None:
+    """Keys from /bot content/save HAR + extract — do not invent extras."""
+    row_uuid = "a6d71d4a-af04-11f1-b622-1aea6a5aa721"
+    cell_uuid = "a6d71c6e-af04-11f1-b622-1aea6a5aa721"
+    layout = {"widgets": [], "components": []}
+    content = {
+        "uid": "5686867710165115",
+        "type": "page",
+        "customContentType": "380196875712380",
+        "template": {
+            "components": [
+                {
+                    "type": "row",
+                    "uuid": row_uuid,
+                    "cells": [
+                        {
+                            "type": "cell",
+                            "uuid": cell_uuid,
+                            "width": 12,
+                            "components": [
+                                {
+                                    "type": "widget",
+                                    "widgetType": "title",
+                                    "uuid": "e6518866-d43e-4e85-981b-775710254c13",
+                                    "properties": {"isCollapsible": False, "more": {}, "stylesMigrated": True},
+                                },
+                                {
+                                    "type": "widget",
+                                    "widgetType": "html",
+                                    "uuid": "a6d71ade-af04-11f1-b622-1aea6a5aa721",
+                                    "properties": {
+                                        "widgetClass": "grok-home-intro",
+                                        "identifier": "home-intro",
+                                        "content": {"en": "<p>Internal only.</p>", "fr": ""},
+                                    },
+                                },
+                                {
+                                    "type": "widget",
+                                    "widgetType": "featured-image",
+                                    "uuid": "b4cae545-d033-4e80-a530-bbe2d3e54330",
+                                    "properties": {
+                                        "widgetClass": "grok-hero",
+                                        "identifier": "home-hero",
+                                        "imageFormat": {"position": "center center", "size": "cover"},
+                                    },
+                                },
+                                {
+                                    "type": "widget",
+                                    "widgetType": "content-list",
+                                    "uuid": "1d06350f-9fde-4ee3-b2a8-9f36b76fa092",
+                                    "properties": {
+                                        "class": "grok-home-news",
+                                        "widgetClass": "grok-news, grok-pills",
+                                        "identifier": "home-news",
+                                        "thumbnailPosition": "background",
+                                        "uncompressedThumbnail": True,
+                                        "viewMode": "horizontal",
+                                        "perLine": 3,
+                                        "customContentType": ["7791571772708800"],
+                                        "settings": {
+                                            "viewMode": "horizontal",
+                                            "itemsPerLine": 3,
+                                            "numberOfItemsPerLine": 3,
+                                            "maxNumber": 3,
+                                            "types": ["news"],
+                                            "contentTypes": ["news"],
+                                            "isHighResolution": True,
+                                            "fields": {
+                                                "author": False,
+                                                "date": True,
+                                                "excerpt": False,
+                                                "social": False,
+                                                "tags": True,
+                                                "title": True,
+                                            },
+                                        },
+                                        "style": {"content": {}, "main": {}, "header": {}, "footer": {}},
+                                    },
+                                },
+                                {
+                                    "type": "widget",
+                                    "widgetType": "directory-entry",
+                                    "uuid": "cb986a70-fbec-4784-a04b-6a611231e57a",
+                                    "properties": {
+                                        "class": "grok-home-links",
+                                        "widgetClass": "grok-links",
+                                        "identifier": "home-links",
+                                        "directory": ["8821612211991448"],
+                                        "viewMode": "list",
+                                        "viewModeVariant": "group",
+                                        "settings": {"displayMode": "catalogue"},
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+    text = _format_layout_response(layout, content)
+    assert text.count("  • ") == 5
+    assert "use this id for writes: 1d06350f-9fde-4ee3-b2a8-9f36b76fa092" in text
+    assert 'properties.thumbnailPosition: "background"' in text
+    assert "properties.uncompressedThumbnail: true" in text
+    assert "cover: unset" not in text
+    assert "thumbnail-in-background" not in text
+    assert "row uuid=" + row_uuid in text
+    assert "cell uuid=" + cell_uuid in text
+    assert "properties.class: 'grok-home-news'" in text
+    assert "[single token (content/save payload)]" in text
+    assert "properties.widgetClass: 'grok-news, grok-pills'" in text
+    assert "[comma list (content/save payload)]" in text
+    html_block = text.split("  • 'html'")[1].split("  • ")[0]
+    assert "properties.class" not in html_block
+    assert "grok-home-intro" in html_block
+    hero_block = text.split("  • 'featured-image'")[1].split("  • ")[0]
+    assert "properties.class" not in hero_block
+    assert "grok-hero" in hero_block
+    assert "imageFormat" in hero_block
+    assert "live CSS: unknown" in text
+    assert "live CSS: .widget--grok-home-news" not in text
+    assert text.count("footer link: unset") == 2
+    assert "properties.settings" in text
+    assert "properties.viewMode" in text
+    assert "properties.perLine: 3" in text
+    assert 'properties.directory: ["8821612211991448"]' in text
+    assert "properties.style" not in text
+    assert "Internal only" in text
 
 
 def test_featured_image_media_id_only() -> None:

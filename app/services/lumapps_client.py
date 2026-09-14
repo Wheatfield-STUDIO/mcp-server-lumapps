@@ -325,9 +325,11 @@ class LumAppsClient:
         body: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """
-        Load the block/settings for a widget type on a site.
-        POST v2/organizations/{org_id}/widgets/{widget_type}/blocks?siteId=...&canUseLangFallback=...&forceDisplay=...
-        Used to get current widget config (body.style, text, etc.) before or after editing.
+        Post-save render (HAR /bot homepage): not the write path.
+        POST v2/organizations/{org_id}/widgets/{widget_type}/blocks?siteId=...&forceDisplay=true
+        (&canUseLangFallback=false for title).
+        Body observed: {ownerResourceInfo: {ownerResourceId, ownerResourceType: "content", properties},
+        widgetComponent: template widget}. Writes go through content/save.
         """
         path = f"v2/organizations/{self.org_id}/widgets/{widget_type}/blocks"
         params = {"siteId": site_id, "forceDisplay": str(force_display).lower()}

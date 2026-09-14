@@ -31,25 +31,28 @@ TOOL_SCHEMA = {
     "name": TOOL_NAME,
     "description": (
         "Deep-merge widget settings on a LumApps page (content.template) via content/save. "
-        "Use for display mode, types, count, Advanced classes (widgetClass), identifier, footer link. "
+        "Use for display mode, types, count, Advanced classes, identifier. "
         "Does NOT write properties.style — use update_widget_style for padding/margin/border. "
         "IMPORTANT: Always run inspect_lumapps_element first. Before calling this tool, you MUST present "
         "the modification to the user and wait for their explicit 'Yes' or 'Confirm' in the chat. "
         "Never apply changes silently. "
-        "Keys observed on Sandbox homepage widgets (content-list, directory, links, html) — not a theoretical spec: "
-        "properties.class and properties.widgetClass both appear on /bot widgets "
-        "(Advanced tab \"Widget classes\" → which field is not in repo resources; inspect labels live CSS unknown), "
+        "Keys from /bot homepage content/save (HAR 2026-09-14) — not a theoretical spec: "
+        "properties.class (single token, e.g. grok-home-news), "
+        "properties.widgetClass (comma list, e.g. 'grok-news, grok-pills'), "
         "properties.identifier, "
-        "properties.settings.viewMode / display (content-list: 'horizontal'), "
-        "properties.settings.itemsPerLine / numberOfItemsPerLine, "
+        "properties.thumbnailPosition (content-list: 'background'), "
+        "properties.uncompressedThumbnail (content-list: true), "
+        "properties.viewMode (content-list: 'horizontal'; also settings.viewMode), "
+        "properties.perLine (content-list: 3), "
+        "properties.settings.itemsPerLine / numberOfItemsPerLine / maxNumber, "
         "properties.settings.types / contentTypes (e.g. news), "
-        "properties.settings.maxNumber / count, "
         "properties.settings.fields (date/tags/title on; author/excerpt/social off), "
-        "properties.settings.isHighResolution / thumbnail background, "
-        "properties.settings.footer or properties.footer ({label, href}), "
-        "directory: properties.settings.displayMode (catalogue), ungrouped, count, "
-        "links: properties.settings.links / items, "
-        "html: properties.content / properties.html / properties.settings.html."
+        "properties.settings.isHighResolution, "
+        "directory-entry: properties.directory (array of uids), properties.viewMode / viewModeVariant, "
+        "properties.settings.displayMode (catalogue), "
+        "html: properties.content (locale map) + widgetClass, "
+        "featured-image: properties.imageFormat + widgetClass. "
+        "No footer link on that /bot save. live CSS .widget-- is not documented."
     ),
     "inputSchema": {
         "type": "object",
@@ -66,9 +69,11 @@ TOOL_SCHEMA = {
             "settings_updates": {
                 "type": "string",
                 "description": (
-                    "JSON object deep-merged into the template widget. Example: "
-                    '{"properties": {"widgetClass": "grok-news, grok-pills", "identifier": "home-news", '
-                    '"settings": {"viewMode": "horizontal", "itemsPerLine": 3}}}. '
+                    "JSON object deep-merged into the template widget. Example from /bot content-list: "
+                    '{"properties": {"class": "grok-home-news", "widgetClass": "grok-news, grok-pills", '
+                    '"identifier": "home-news", "thumbnailPosition": "background", '
+                    '"uncompressedThumbnail": true, "viewMode": "horizontal", "perLine": 3, '
+                    '"settings": {"viewMode": "horizontal", "itemsPerLine": 3, "types": ["news"]}}}. '
                     "properties.style in this payload is ignored."
                 ),
             },
