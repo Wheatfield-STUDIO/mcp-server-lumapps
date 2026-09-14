@@ -12,37 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Update site theme: palette, header (top/mainNav), and slideshow on style.properties."""
+"""Update site theme: palette/nav on style.properties; slideshow on header/save (HAR)."""
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
 from app.tools.api_error_utils import format_api_error, is_permission_denied, PERMISSION_DENIED_MESSAGE
-from app.tools.inspect_lumapps_element import find_slideshow_paths
 from app.tools.widget_template import deep_merge
 
 logger = logging.getLogger(__name__)
 
 TOOL_NAME = "update_site_theme"
 
-# Slideshow keys from LumApps style/instance JSON blob (Style.properties is untyped in discovery).
-# Sandbox acceptance values: height 0, wrapperHeight 0, contentPosition 10 or 15.
-SLIDESHOW_FIELD_NAMES = ("height", "wrapperHeight", "contentPosition", "autoplay", "interval")
+# HAR POST header/save (save-style.har): height, properties.wrapperHeight,
+# properties.layoutPosition, properties.interval. contentPosition is accepted as
+# an alias for layoutPosition (user 0/0/10 == HAR layoutPosition 10).
+SLIDESHOW_FIELD_NAMES = ("height", "wrapperHeight", "layoutPosition", "contentPosition", "interval")
 
 TOOL_SCHEMA = {
     "name": TOOL_NAME,
     "description": (
-        "Update a LumApps site theme (style.properties): color palette, header (top / mainNav / search), "
-        "and slideshow. GET style/get → merge → style/save. Never POSTs a style without id. "
-        "colors[] is replaced only when palette.colors is passed; otherwise the existing palette list is kept. "
-        "Slideshow fields (discovered on the style/instance JSON blob; typed Style.properties is a string in "
-        f"lumsites discovery): {', '.join(SLIDESHOW_FIELD_NAMES)}. "
-        "Merged into style.properties.slideshow when that object exists, else instance.properties.slideshow, "
-        "else created under style.properties.slideshow. "
+        "Update a LumApps site theme: palette/nav via style/get → style/save; "
+        "slideshow via header/get → header/save (HAR save-style.har). "
+        "Never POSTs a style without id. colors[] is replaced only when palette.colors is passed. "
+        "Slideshow HAR keys: header.height, header.properties.wrapperHeight, "
+        "header.properties.layoutPosition, header.properties.interval. "
+        "contentPosition is accepted as an alias for layoutPosition. "
+        "Do not write style.properties.slideshow — that path is not in the BO style save. "
         "IMPORTANT: Always run inspect_lumapps_element with site_id first. Before calling this tool, you MUST "
         "present the modification to the user and wait for their explicit 'Yes' or 'Confirm'. Never apply changes silently."
     ),
@@ -65,9 +65,9 @@ TOOL_SCHEMA = {
             "slideshow": {
                 "type": "object",
                 "description": (
-                    "Slideshow fields on the style/instance properties blob: "
-                    "height, wrapperHeight, contentPosition, autoplay, interval. "
-                    "Sandbox reference values: height 0, wrapperHeight 0, contentPosition 10 or 15."
+                    "HAR header/save fields: height, wrapperHeight, layoutPosition, interval. "
+                    "contentPosition is an alias for layoutPosition (0/0/10 → height 0, "
+                    "wrapperHeight 0, layoutPosition 10)."
                 ),
             },
         },
@@ -155,53 +155,38 @@ def apply_header(properties: Dict[str, Any], header: Dict[str, Any]) -> List[str
     return notes
 
 
-def _resolve_slideshow_target(
-    style_props: Dict[str, Any],
-    instance_props: Optional[Dict[str, Any]],
-) -> Tuple[Dict[str, Any], str, bool]:
-    """
-    Pick the object to merge slideshow into.
-    Returns (target_dict, path, write_instance).
-    """
-    if isinstance(style_props.get("slideshow"), dict):
-        return style_props["slideshow"], "style.properties.slideshow", False
-    style_paths = find_slideshow_paths(style_props)
-    if any(p == "properties.slideshow" or p.startswith("properties.slideshow.") for p in style_paths):
-        style_props.setdefault("slideshow", {})
-        if not isinstance(style_props["slideshow"], dict):
-            style_props["slideshow"] = {}
-        return style_props["slideshow"], "style.properties.slideshow", False
-    if isinstance(instance_props, dict) and isinstance(instance_props.get("slideshow"), dict):
-        return instance_props["slideshow"], "instance.properties.slideshow", True
-    if isinstance(instance_props, dict):
-        inst_paths = find_slideshow_paths(instance_props, prefix="instance.properties")
-        if inst_paths:
-            instance_props.setdefault("slideshow", {})
-            if not isinstance(instance_props["slideshow"], dict):
-                instance_props["slideshow"] = {}
-            return instance_props["slideshow"], "instance.properties.slideshow", True
-    style_props.setdefault("slideshow", {})
-    if not isinstance(style_props["slideshow"], dict):
-        style_props["slideshow"] = {}
-    return style_props["slideshow"], "style.properties.slideshow", False
-
-
-def apply_slideshow(
-    style_props: Dict[str, Any],
-    instance_props: Optional[Dict[str, Any]],
-    slideshow: Dict[str, Any],
-) -> Tuple[List[str], bool]:
-    allowed = {k: slideshow[k] for k in SLIDESHOW_FIELD_NAMES if k in slideshow}
-    extra = {k: v for k, v in slideshow.items() if k not in SLIDESHOW_FIELD_NAMES}
-    # Only merge extra keys that already exist on the target (do not invent new payload keys).
-    target, path, write_instance = _resolve_slideshow_target(style_props, instance_props)
-    merged = dict(allowed)
-    for k, v in extra.items():
-        if k in target:
-            merged[k] = v
-    deep_merge(target, merged)
-    notes = [f"{path} += {json.dumps(merged)}"]
-    return notes, write_instance
+def apply_slideshow(header: Dict[str, Any], slideshow: Dict[str, Any]) -> List[str]:
+    """Merge slideshow into a header resource (HAR header/save keys only)."""
+    if not isinstance(header, dict):
+        raise ValueError("header/save target is missing.")
+    props = header.get("properties")
+    if not isinstance(props, dict):
+        props = {}
+        header["properties"] = props
+    notes: List[str] = []
+    if "height" in slideshow:
+        header["height"] = slideshow["height"]
+        notes.append(f"header.height={slideshow['height']!r}")
+    if "wrapperHeight" in slideshow:
+        props["wrapperHeight"] = slideshow["wrapperHeight"]
+        notes.append(f"header.properties.wrapperHeight={slideshow['wrapperHeight']!r}")
+    if "layoutPosition" in slideshow:
+        props["layoutPosition"] = slideshow["layoutPosition"]
+        notes.append(f"header.properties.layoutPosition={slideshow['layoutPosition']!r}")
+    elif "contentPosition" in slideshow:
+        props["layoutPosition"] = slideshow["contentPosition"]
+        notes.append(
+            f"header.properties.layoutPosition={slideshow['contentPosition']!r} (alias of contentPosition)"
+        )
+    if "interval" in slideshow:
+        props["interval"] = slideshow["interval"]
+        notes.append(f"header.properties.interval={slideshow['interval']!r}")
+    if not notes:
+        raise ValueError(
+            "slideshow must include at least one HAR key: height, wrapperHeight, "
+            "layoutPosition (or contentPosition), interval."
+        )
+    return notes
 
 
 async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -214,12 +199,12 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         palette = _as_object(arguments.get("palette"), "palette")
-        header = _as_object(arguments.get("header"), "header")
+        header_patch = _as_object(arguments.get("header"), "header")
         slideshow = _as_object(arguments.get("slideshow"), "slideshow")
     except (json.JSONDecodeError, ValueError, TypeError) as e:
         return {"content": [{"type": "text", "text": f"Invalid theme payload: {e}"}]}
 
-    if not palette and not header and not slideshow:
+    if not palette and not header_patch and not slideshow:
         return {
             "content": [
                 {"type": "text", "text": "Provide at least one of: palette, header, slideshow."}
@@ -230,78 +215,104 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
-        data = await lumapps_client.get_style_by_instance(site_id, token=token)
     except Exception as e:
-        logger.exception("update_site_theme get_style_by_instance failed")
-        return {
-            "content": [{"type": "text", "text": f"Could not load site style: {format_api_error(e)}."}]
-        }
-
-    style = data.get("style")
-    if not style:
-        return {
-            "content": [
-                {
-                    "type": "text",
-                    "text": "This site has no theme. Create the theme in LumApps admin: Design / Theme → save. Then retry.",
-                }
-            ]
-        }
-    style_id = style.get("id") or style.get("uid")
-    if not style_id:
-        return {"content": [{"type": "text", "text": "Style object has no 'id'. Refusing to POST style/save without id."}]}
-
-    style["id"] = style_id
-    properties = style.get("properties")
-    if not isinstance(properties, dict):
-        properties = {}
-        style["properties"] = properties
-
-    instance: Optional[Dict[str, Any]] = None
-    instance_props: Optional[Dict[str, Any]] = None
-    try:
-        instance = await lumapps_client.get_instance(site_id, token=token)
-        if isinstance(instance, dict) and isinstance(instance.get("properties"), dict):
-            instance_props = instance["properties"]
-        elif isinstance(instance, dict):
-            instance_props = {}
-            instance["properties"] = instance_props
-    except Exception as e:
-        logger.warning("update_site_theme get_instance failed: %s", e)
+        return {"content": [{"type": "text", "text": f"Could not get token: {format_api_error(e)}."}]}
 
     notes: List[str] = []
-    write_instance = False
-    try:
-        if palette:
-            notes.extend(apply_palette(properties, palette))
-        if header:
-            notes.extend(apply_header(properties, header))
-        if slideshow:
-            slide_notes, slide_on_instance = apply_slideshow(properties, instance_props, slideshow)
-            notes.extend(slide_notes)
-            write_instance = write_instance or slide_on_instance
-    except ValueError as e:
-        return {"content": [{"type": "text", "text": str(e)}]}
+    style_id = None
 
-    try:
-        await lumapps_client.save_style(style, token=token)
-    except Exception as e:
-        logger.exception("update_site_theme save_style failed")
-        text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Could not save style: {format_api_error(e)}."
-        return {"content": [{"type": "text", "text": text}]}
-
-    if write_instance and isinstance(instance, dict):
+    if palette or header_patch:
         try:
-            await lumapps_client.save_instance(instance, token=token)
+            data = await lumapps_client.get_style_by_instance(site_id, token=token)
         except Exception as e:
-            logger.exception("update_site_theme save_instance failed")
-            text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Style saved but instance slideshow failed: {format_api_error(e)}."
+            logger.exception("update_site_theme get_style_by_instance failed")
+            return {
+                "content": [{"type": "text", "text": f"Could not load site style: {format_api_error(e)}."}]
+            }
+
+        style = data.get("style")
+        if not style:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "This site has no theme. Create the theme in LumApps admin: Design / Theme → save. Then retry.",
+                    }
+                ]
+            }
+        style_id = style.get("id") or style.get("uid")
+        if not style_id:
+            return {"content": [{"type": "text", "text": "Style object has no 'id'. Refusing to POST style/save without id."}]}
+
+        style["id"] = style_id
+        properties = style.get("properties")
+        if not isinstance(properties, dict):
+            properties = {}
+            style["properties"] = properties
+        try:
+            if palette:
+                notes.extend(apply_palette(properties, palette))
+            if header_patch:
+                notes.extend(apply_header(properties, header_patch))
+        except ValueError as e:
+            return {"content": [{"type": "text", "text": str(e)}]}
+        try:
+            await lumapps_client.save_style(style, token=token)
+        except Exception as e:
+            logger.exception("update_site_theme save_style failed")
+            text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Could not save style: {format_api_error(e)}."
+            return {"content": [{"type": "text", "text": text}]}
+
+    if slideshow:
+        try:
+            instance = await lumapps_client.get_instance(site_id, token=token)
+        except Exception as e:
+            logger.exception("update_site_theme get_instance failed")
+            return {
+                "content": [
+                    {"type": "text", "text": f"Could not load instance for header slideshow: {format_api_error(e)}."}
+                ]
+            }
+        header_id = None
+        if isinstance(instance, dict):
+            header_id = instance.get("defaultHeader") or instance.get("header")
+        if not header_id:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Slideshow is header/save (HAR), not style.properties. "
+                            "instance.defaultHeader is missing; cannot POST header/save."
+                        ),
+                    }
+                ]
+            }
+        try:
+            header_resource = await lumapps_client.get_header(str(header_id), token=token)
+        except Exception as e:
+            logger.exception("update_site_theme get_header failed")
+            return {
+                "content": [{"type": "text", "text": f"Could not load header {header_id}: {format_api_error(e)}."}]
+            }
+        if not isinstance(header_resource, dict):
+            return {"content": [{"type": "text", "text": f"header/get for {header_id} did not return an object."}]}
+        try:
+            notes.extend(apply_slideshow(header_resource, slideshow))
+        except ValueError as e:
+            return {"content": [{"type": "text", "text": str(e)}]}
+        try:
+            await lumapps_client.save_header(header_resource, token=token)
+        except Exception as e:
+            logger.exception("update_site_theme save_header failed")
+            text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Could not save header slideshow: {format_api_error(e)}."
             return {"content": [{"type": "text", "text": text}]}
 
     base_url = (settings.SITE_BASE_URL or "").rstrip("/")
+    style_bit = f"style id={style_id}. " if style_id else ""
     msg = (
-        f"Theme updated for site_id={site_id} (style id={style_id}). "
+        f"Theme updated for site_id={site_id} ({style_bit}"
         + "; ".join(notes)
-        + f" Verify at: {base_url}. Re-inspect with inspect_lumapps_element (site_id)."
+        + f"). Verify at: {base_url}. Re-inspect with inspect_lumapps_element (site_id)."
     )
     return {"content": [{"type": "text", "text": msg}]}

@@ -42,13 +42,54 @@ TOOL_SCHEMA = {
         "type": "object",
         "properties": {
             "site_id": {"type": "string", "description": "LumApps site/instance ID (used as instanceId for the style API)."},
-            "new_css": {"type": "string", "description": "CSS to add or set. Must start with the DOCUMENT INFORMATION header. For design system/branding use LumApps CSS variables in :root (see resource lumapps-css-variables); avoid raw selectors (button, body, *) for theme changes. For targeted fixes use selectors like .widget-news h2 { padding-top: 10px; }."},
+            "new_css": {
+                "type": "string",
+                "description": (
+                    "CSS source to add or set — the stylesheet text, not a file path. "
+                    "Rejects @/…, /workspace/…, and bare .css filenames with no { } rules. "
+                    "Must start with the DOCUMENT INFORMATION header. "
+                    "For design system/branding use LumApps CSS variables in :root "
+                    "(see resource lumapps-css-variables)."
+                ),
+            },
             "append": {"type": "boolean", "description": "If true, append new_css to existing CSS with a timestamp comment. If false, replace the target stylesheet content. Default true."},
             "user_email": {"type": "string", "description": "Current user email (for LumApps API token and for the version field in the stylesheet header)."},
         },
         "required": ["site_id", "new_css", "user_email"],
     },
 }
+
+
+def looks_like_css_file_path(new_css: Any) -> bool:
+    """True when new_css is a path (@/…, /workspace/…, foo.css) rather than CSS rules."""
+    if not isinstance(new_css, str):
+        return False
+    text = new_css.strip()
+    if not text:
+        return False
+    if text.startswith("@/") or text.startswith("@\\"):
+        return True
+    lowered = text.lower()
+    has_rules = "{" in text and "}" in text
+    if has_rules:
+        return False
+    if lowered.endswith(".css") or lowered.endswith(".scss") or lowered.endswith(".less"):
+        return True
+    path_prefixes = ("/workspace/", "/home/", "/users/", "/opt/", "./", "../")
+    if lowered.startswith(path_prefixes) or text.startswith("\\"):
+        return True
+    return False
+
+
+def _path_rejected_message(new_css: str) -> str:
+    shown = new_css.strip()
+    if len(shown) > 160:
+        shown = shown[:160] + "…"
+    return (
+        "400: new_css looks like a file path "
+        f"({shown!r}). Pass the CSS source (rules with {{ }}), not @/workspace/… or a .css filename. "
+        "Nothing was saved to the theme."
+    )
 
 
 def _pick_stylesheet(style: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -72,6 +113,8 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Missing 'new_css' argument")
     if not user_email:
         raise ValueError("Missing 'user_email' argument")
+    if looks_like_css_file_path(new_css):
+        return {"content": [{"type": "text", "text": _path_rejected_message(str(new_css))}]}
 
     logger.info(f"Executing update_global_css site_id={site_id}, append={append}")
     try:

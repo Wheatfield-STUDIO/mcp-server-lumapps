@@ -43,9 +43,10 @@ TOOL_SCHEMA = {
         "Use site_id + user_email for the site theme. "
         "One line per widget. 'use this id for writes' is the content.template uuid "
         "(layoutId is also accepted via map). "
-        "live CSS is unknown: /bot content/save has both properties.class (single token) and "
-        "properties.widgetClass (comma list); repo does not map either to .widget--. "
+        "When properties.class is set, one line: rendered: widget widget--{class}. "
+        "Stay silent if class is absent. Do not repeat a live-CSS disclaimer. "
         "content-list dumps thumbnailPosition / uncompressedThumbnail (not 'cover'). "
+        "settings.fields vs properties.fields[]: content/save persisted both (HAR req==resp). "
         "Inspect properties.settings plus sibling keys the BO saved (viewMode, perLine, …). "
         "Footer link is unset only when that field is absent. "
         "Parent prints template row uuid / cell uuid when present. "
@@ -178,30 +179,35 @@ def _nonempty_class_token(value: Any) -> Optional[str]:
 
 
 def _widget_live_css(props: Dict[str, Any]) -> Optional[str]:
-    """
-    Do not invent a .widget-- hook. Repo evidence:
-    - lumapps-css-variables.md only shows product BEM .widget--has-ungrouped-container-block
-    - lumapps-customizations-api.md targets widgets as widget-<id> or widget-<identifier>
-    - this server historically listed properties.widgetClass as Advanced classes
-    - /bot payloads also have properties.class
-    Advanced tab "Widget classes" → which field, and whether the front prefixes .widget--,
-    is not documented. Say unknown.
-    """
+    """BO Advanced tab is widget--; payload key is properties.class. One short line or silent."""
     props = props if isinstance(props, dict) else {}
     klass = _nonempty_class_token(props.get("class"))
-    wclass = _nonempty_class_token(props.get("widgetClass"))
-    if not klass and not wclass:
+    if not klass:
         return None
-    bits = []
-    if klass:
-        bits.append(f"class={klass}")
-    if wclass:
-        bits.append(f"widgetClass={wclass}")
-    return (
-        "live CSS: unknown — /bot content/save has class (single) and widgetClass "
-        "(comma list); no HAR/docs quote that the front prefixes .widget--. "
-        f"{'; '.join(bits)} — do not assume .widget--{{class}} or .widget--{{widgetClass}}"
-    )
+    token = klass.replace(",", " ").split()[0]
+    if not token:
+        return None
+    return f"rendered: widget widget--{token}"
+
+
+def _fields_honor_lines(w_type: str, props: Dict[str, Any], settings: Any) -> List[str]:
+    """content/save HAR: both settings.fields and properties.fields[] were stored unchanged."""
+    if normalize_widget_type(w_type) != "content-list":
+        return []
+    props = props if isinstance(props, dict) else {}
+    bag = settings if isinstance(settings, dict) else {}
+    settings_fields = bag.get("fields")
+    array_fields = props.get("fields")
+    if settings_fields is None and array_fields is None:
+        return []
+    return [
+        "      fields: content/save persisted both (HAR request === response; no rewrite). "
+        "settings.fields is the typed bag "
+        f"({json.dumps(settings_fields) if settings_fields is not None else 'absent'}); "
+        "properties.fields[] is the legacy array "
+        f"({json.dumps(array_fields) if array_fields is not None else 'absent'}). "
+        "They can disagree (excerpt/social). Save does not pick a winner — write the bag you mean."
+    ]
 
 
 def _is_empty_style(value: Any) -> bool:
@@ -362,6 +368,7 @@ def _format_widget_entry(
     live_css = _widget_live_css(props)
     if live_css:
         lines.append(f"      {live_css}")
+    lines.extend(_fields_honor_lines(w_type, props, settings))
     lines.extend(_visual_lines(w_type, props, settings))
 
     w_type_norm = (w_type or "").strip().lower()
@@ -566,8 +573,9 @@ def _format_theme_properties(props: Any) -> List[str]:
             lines.append(f"  {path}: {json.dumps(node)}")
     else:
         lines.append(
-            "slideshow: (not present on style.properties; inspect instance.properties below. "
-            "Typed Style.properties in LumApps discovery is an untyped JSON blob.)"
+            "slideshow: not on style.properties (HAR style/save keys: "
+            "accent, colors, footer, mainNav, primary, search, secondary, top). "
+            "BO persist is header/save — see Header slideshow below."
         )
 
     extra = [k for k in props.keys() if k not in ("primary", "secondary", "accent", "colors", "top", "mainNav", "search", "footer", "slideshow")]
@@ -577,11 +585,27 @@ def _format_theme_properties(props: Any) -> List[str]:
     return lines
 
 
+def _format_header_slideshow(header: Optional[Dict[str, Any]]) -> List[str]:
+    """HAR header/save: height + properties.wrapperHeight / layoutPosition / interval."""
+    lines = ["--- Header slideshow (HAR POST header/save, not style.properties) ---"]
+    if not isinstance(header, dict):
+        lines.append("header: unset (no instance.defaultHeader / header/get)")
+        return lines
+    props = header.get("properties") if isinstance(header.get("properties"), dict) else {}
+    lines.append(f"header.id: {header.get('id') or header.get('uid') or '—'}")
+    lines.append(f"header.height: {json.dumps(header.get('height'))}")
+    lines.append(f"header.properties.wrapperHeight: {json.dumps(props.get('wrapperHeight'))}")
+    lines.append(f"header.properties.layoutPosition: {json.dumps(props.get('layoutPosition'))}")
+    lines.append(f"header.properties.interval: {json.dumps(props.get('interval'))}")
+    return lines
+
+
 def _format_style_response(
     style: Dict[str, Any],
     instance: Optional[Dict[str, Any]] = None,
     *,
     full: bool = False,
+    header: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Format style properties, instance head, and stylesheets."""
     lines = [
@@ -604,7 +628,13 @@ def _format_style_response(
             inst_paths = find_slideshow_paths(inst_props, prefix="instance.properties")
             if inst_paths:
                 lines.append(f"instance slideshow-related paths: {', '.join(inst_paths)}")
+            elif inst_props == {}:
+                lines.append("instance.properties is {} (HAR instance/save) — slideshow is not here.")
+        lines.append(f"instance.defaultHeader: {instance.get('defaultHeader') or '—'}")
         lines.append("")
+
+    lines.extend(_format_header_slideshow(header))
+    lines.append("")
 
     sheets = style.get("stylesheets") or []
     if not sheets:
@@ -677,11 +707,20 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
                     "content": [{"type": "text", "text": f"No style found for site_id={site_id!r}. Check the site/instance ID."}]
                 }
             instance: Optional[Dict[str, Any]] = None
+            header: Optional[Dict[str, Any]] = None
             try:
                 instance = await lumapps_client.get_instance(site_id, token=token)
             except Exception as e:
                 logger.warning("inspect_lumapps_element get_instance failed: %s", e)
-            text = _format_style_response(style, instance, full=full)
+            header_id = None
+            if isinstance(instance, dict):
+                header_id = instance.get("defaultHeader") or instance.get("header")
+            if header_id:
+                try:
+                    header = await lumapps_client.get_header(str(header_id), token=token)
+                except Exception as e:
+                    logger.warning("inspect_lumapps_element get_header failed: %s", e)
+            text = _format_style_response(style, instance, full=full, header=header)
             return {"content": [{"type": "text", "text": text}]}
         except Exception as e:
             logger.exception("inspect_lumapps_element style API failed")

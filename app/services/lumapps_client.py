@@ -17,7 +17,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from app.core.config import settings
 from app.services.lumapps_auth import lumapps_auth
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -432,6 +432,16 @@ class LumAppsClient:
         if fields:
             params["fields"] = fields
         return await self._request("GET", path, token=token, params=params)
+
+    async def get_header(self, header_uid: str, token: str) -> Dict[str, Any]:
+        """GET _ah/api/lumsites/v1/header/get?uid= — slideshow lives here (HAR header/save)."""
+        path = "_ah/api/lumsites/v1/header/get"
+        return await self._request("GET", path, token=token, params={"uid": header_uid})
+
+    async def save_header(self, header: Dict[str, Any], token: str) -> Dict[str, Any]:
+        """POST _ah/api/lumsites/v1/header/save — BO style-save HAR write for slideshow."""
+        path = "_ah/api/lumsites/v1/header/save"
+        return await self._request("POST", path, token=token, json=header)
 
     async def save_instance(self, instance: Dict[str, Any], token: str) -> Dict[str, Any]:
         """
