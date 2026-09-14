@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.services.lumapps_auth import LumAppsAuthManager
-from app.tools import inspect_lumapps_element, inspect_navigation
+from app.tools import inspect_lumapps_element, inspect_navigation, inspect_widget_render
 from app.tools.update_site_theme import handle as update_site_theme_handle
 
 
@@ -96,6 +96,45 @@ def test_inspect_layout_uses_read_oauth() -> None:
     assert "Admin tools require" not in text
     assert "Layout inspection failed" not in text
     assert "get_widget_blocks" not in text
+
+
+def test_inspect_widget_render_uses_read_oauth() -> None:
+    with (
+        patch("app.tools.inspect_widget_render.lumapps_auth.get_inspect_token", new_callable=AsyncMock) as gt,
+        patch("app.tools.inspect_widget_render.lumapps_client.get_content", new_callable=AsyncMock) as gc,
+        patch("app.tools.inspect_widget_render.lumapps_client.get_widget_blocks", new_callable=AsyncMock) as gb,
+    ):
+        gt.return_value = "read-tok"
+        gc.return_value = {
+            "id": "c1",
+            "instance": "site-1",
+            "type": "page",
+            "template": {
+                "components": [
+                    {
+                        "type": "widget",
+                        "uuid": "w1",
+                        "widgetType": "title",
+                        "properties": {},
+                    }
+                ]
+            },
+        }
+        gb.return_value = {
+            "more": False,
+            "widget": {"body": {"type": "BlockTitle", "text": "Hi"}, "widgetType": "title"},
+        }
+        result = asyncio.run(
+            inspect_widget_render.handle(
+                {"content_id": "c1", "user_email": "dev@example.com", "widget_id": "w1"}
+            )
+        )
+    gt.assert_called_once_with(user_email="dev@example.com")
+    gb.assert_called_once()
+    assert gb.call_args.kwargs.get("token") == "read-tok"
+    text = result["content"][0]["text"]
+    assert "Admin tools require" not in text
+    assert "BlockTitle" in text
 
 
 def test_inspect_navigation_uses_read_oauth() -> None:

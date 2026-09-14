@@ -51,11 +51,13 @@ TOOL_SCHEMA = {
         "Footer link is unset only when that field is absent. "
         "Parent prints template row uuid / cell uuid when present. "
         "Empty properties.style is omitted unless verbose=true. "
-        "Writes are content/save (HAR); widget blocks is a post-save render, not used here. "
+        "Writes are content/save (HAR). For rendered markup / class names, call "
+        "inspect_widget_render (POST /widgets/{type}/blocks with ownerResourceInfo). "
         "Set full=true for complete custom CSS. Set verbose=true for both component trees "
         "and empty style dumps. "
         "No browser; works via API. Use the result to prepare a safe write "
         "(update_widget_settings, update_widget_style, update_site_theme, update_global_css). "
+        "For widget CSS: inspect_lumapps_element, then inspect_widget_render, then update_global_css. "
         "This tool is read-only: no Yes/Confirm is required."
     ),
     "inputSchema": {

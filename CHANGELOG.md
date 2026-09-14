@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`inspect_widget_render`**: post-save render via HAR `POST /v2/organizations/{org}/widgets/{type}/blocks?siteId=&forceDisplay=true` with `{ownerResourceInfo, widgetComponent}`. One widget (template uuid / widgetType), a row (compose cell widgets), or the page (compose all widgets). Lists class names from `widget.cssClass` and any HTML `class` attributes. `/blocks` returns a JSON block tree, not DOM HTML. No page HTML endpoint in the HAR; `get_content_body` is extracted article text. RBAC **content** (same as inspect). Conduct: inspect, then render, then `update_global_css`.
 - **Email allowlist (fail closed)**: `MCP_ALLOWED_USER_EMAILS` is required for every LumApps `tools/call` (read and write). Empty or unset denies all API-key and impersonation tool calls. OIDC emails must also be on the list. Matching is case-insensitive. `initialize` / `tools/list` still work with a valid API key.
 - **No query-string API keys**: `?apiKey=` and `?token=` are rejected. Only `X-API-Key` or `Authorization: Bearer <MCP_API_KEY>` are accepted.
 

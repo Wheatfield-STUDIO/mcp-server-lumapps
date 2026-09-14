@@ -104,11 +104,11 @@ LumApps OAuth applications are created with a fixed scope: **all.read** (read-on
 
 | Purpose                   | Env vars                                                                                                   | LumApps scope | Tools                                                                                                             |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Read (end users + inspect)** | `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`) | **all.read**  | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`, `inspect_lumapps_element`, `inspect_navigation` |
+| **Read (end users + inspect)** | `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`) | **all.read**  | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`, `inspect_lumapps_element`, `inspect_widget_render`, `inspect_navigation` |
 | **Admin (writes)**        | `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`                                            | **all.admin** | `update_widget_style`, `update_widget_settings`, `update_global_css`, `update_site_global_settings`, `update_site_theme`, `save_content_page`, `upsert_directory_entry`, `update_navigation_item` |
 
 - **Recommended setup**: Create **two OAuth applications** in LumApps for the same organization: one with **all.read** (for search and inspect), one with **all.admin** (for writes). Set the read app in `LUMAPPS_READ_CLIENT_ID`/`LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`) and the admin app in `LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`. The server will use the read app for read/inspect tools and the admin app for modification tools; tokens are cached per user and per profile.
-- **Read-only deployment**: If you only set the read credentials, **inspect works** (`inspect_lumapps_element`, `inspect_navigation` use `profile=read`). Write tools still require the admin app; calling them without `LUMAPPS_ADMIN_*` returns a clear error.
+- **Read-only deployment**: If you only set the read credentials, **inspect works** (`inspect_lumapps_element`, `inspect_widget_render`, `inspect_navigation` use `profile=read`). Write tools still require the admin app; calling them without `LUMAPPS_ADMIN_*` returns a clear error.
 - **Single token (tests)**: If you set `LUMAPPS_ACCESS_TOKEN`, that token is used for both read and admin; no separate admin credentials are needed. The token must have the scope required by the tools you use (admin scope if you call modification tools).
 
 ---
@@ -184,19 +184,20 @@ Credentials stay inside your perimeter; use your existing secret management (e.g
 | `get_useful_links`            | Search useful links (Directory Entries: train, IT, training, etc.)           | Read       | read                   |
 | `search_site`                 | List or search LumApps sites (instances) for discovery and user confirmation | Read       | read                   |
 | `inspect_lumapps_element`     | Inspect page layout or site theme (API only); prepares edits                 | **Content** | read (all.read)       |
+| `inspect_widget_render`       | Post-save widget/row/page render (`/widgets/{type}/blocks`) + class names    | **Content** | read (all.read)       |
 | `inspect_navigation`          | Inspect the site navigation tree                                             | Structural | read (all.read)       |
 | `update_global_css`           | Update site global CSS                                                       | Structural | admin (all.admin)     |
 | `update_widget_style`         | Update a widget's style on a page                                            | Content    | admin + canEdit       |
 | `update_site_global_settings` | Update site footer HTML and/or head scripts                                  | Structural | admin                 |
 
 - **Level**: RBAC sensitivity. **Read** = any authenticated user. **Content** = Contributor or Admin on the page/site (inspect + widget style). **Structural** = Site Administrator only (global CSS, global settings).
-- **LumApps credentials**: **Read** and **inspect** tools (`inspect_lumapps_element`, `inspect_navigation`) use the **read** app (`all.read`). They do **not** need `LUMAPPS_ADMIN_*`. **Write** tools (Content and Structural updates) use the **admin** app when configured. See [Read vs admin credentials](#read-vs-admin-credentials). When [user-level RBAC](#user-level-rbac) is enabled, API key alone cannot run Content or Structural tools unless `RBAC_DENY_API_KEY_FOR_NON_READ=false`.
+- **LumApps credentials**: **Read** and **inspect** tools (`inspect_lumapps_element`, `inspect_widget_render`, `inspect_navigation`) use the **read** app (`all.read`). They do **not** need `LUMAPPS_ADMIN_*`. **Write** tools (Content and Structural updates) use the **admin** app when configured. See [Read vs admin credentials](#read-vs-admin-credentials). When [user-level RBAC](#user-level-rbac) is enabled, API key alone cannot run Content or Structural tools unless `RBAC_DENY_API_KEY_FOR_NON_READ=false`.
 
 ### Conduct rules for modification tools
 
 The tool schemas for **`update_widget_style`**, **`update_global_css`** and **`update_site_global_settings`** instruct the AI to follow strict rules so changes are never applied without user consent:
 
-1. **Always run `inspect_lumapps_element` first** — to get accurate `content_id`/`widget_id` or to target the right elements before changing CSS.
+1. **Always run `inspect_lumapps_element` first** — to get accurate `content_id`/`widget_id` or to target the right elements before changing CSS. For widget or page CSS, then run **`inspect_widget_render`** and only use class names it listed (`widget.cssClass`, HTML `class` attributes). Do not invent `.lumx-*` selectors.
 2. **Present the modification to the user** — describe or show what will be changed (no need to expose raw JSON or CSS unless useful).
 3. **Wait for explicit confirmation** — do not call the tool until the user has replied with "Yes" or "Confirm" (or equivalent) in the chat.
 4. **Never apply changes silently** — the AI must not invoke these tools without having obtained confirmation.
@@ -237,7 +238,7 @@ The server enforces **user-level** role checks so that LumApps governance is res
 
 - **Global Admin (Platform)**: **LumApps user token** payload (the token obtained via impersonation) must contain **`isOrgAdmin: true`** (configurable via `RBAC_ORG_ADMIN_CLAIM`). That token is generated from OAuth2 client credentials + user email; the claim comes from LumApps, not from the OIDC JWT.
 - **Site Admin (Structural tools)**: LumApps **`GET service/front-init?fields=user`** returns `user.instancesSuperAdmin` (site IDs where the user is admin) and `user.isSuperAdmin`. The user must be in that list (or `isSuperAdmin`) for `update_global_css` and `update_site_global_settings`.
-- **Content Editor (Content tools)**: LumApps **`GET content/get?uid=...&fields=canEdit`** returns whether the user can edit that page. Used for `inspect_lumapps_element` and `update_widget_style` when targeting a specific content; when only a site is targeted (e.g. inspect global CSS), Site Admin is required.
+- **Content Editor (Content tools)**: LumApps **`GET content/get?uid=...&fields=canEdit`** returns whether the user can edit that page. Used for `inspect_lumapps_element`, `inspect_widget_render`, and `update_widget_style` when targeting a specific content; when only a site is targeted (e.g. inspect global CSS), Site Admin is required.
 
 **Read tools** still require an allowlisted `user_email` (they are not open to every API-key holder). If LumApps returns 401/403 on a write, the server returns a secure, governance-friendly message. In native mode, if the LumApps user token cannot be obtained for RBAC checks, access is denied (fail-closed). A short-lived cache resolves `content_id` → `site_id` for widget updates. Do not disable `RBAC_ENABLED` on a public `/mcp`.
 

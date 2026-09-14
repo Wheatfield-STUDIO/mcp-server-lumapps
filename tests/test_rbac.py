@@ -37,6 +37,7 @@ def test_get_tool_sensitivity() -> None:
     assert get_tool_sensitivity("search_lumapps") == "read"
     assert get_tool_sensitivity("list_directories") == "read"
     assert get_tool_sensitivity("inspect_lumapps_element") == "content"
+    assert get_tool_sensitivity("inspect_widget_render") == "content"
     assert get_tool_sensitivity("update_widget_style") == "content"
     assert get_tool_sensitivity("update_widget_settings") == "content"
     assert get_tool_sensitivity("save_content_page") == "content"
@@ -84,6 +85,7 @@ def test_new_write_tools_with_api_key_denied(client: TestClient) -> None:
         ("upsert_directory_entry", {"directory_id": "d1", "title": "Link", "url": "https://x", "user_email": "dev@example.com"}),
         ("update_navigation_item", {"site_id": "site-123", "item_id": "n1", "label": "Home", "user_email": "dev@example.com"}),
         ("inspect_navigation", {"site_id": "site-123", "user_email": "dev@example.com"}),
+        ("inspect_widget_render", {"content_id": "c1", "user_email": "dev@example.com"}),
     )
     for name, arguments in cases:
         r = client.post(
@@ -204,6 +206,10 @@ def test_authorize_content_allowed_contributor() -> None:
             asyncio.run(authorize_tool_call(
                 "inspect_lumapps_element",
                 {"site_id": "site-abc", "user_email": "contrib@example.com"},
+            ))
+            asyncio.run(authorize_tool_call(
+                "inspect_widget_render",
+                {"content_id": "c1", "site_id": "site-abc", "user_email": "contrib@example.com"},
             ))
 
 
