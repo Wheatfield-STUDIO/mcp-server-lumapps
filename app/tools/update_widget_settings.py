@@ -52,7 +52,9 @@ TOOL_SCHEMA = {
         "properties.settings.displayMode (catalogue), "
         "html: properties.content (locale map) + widgetClass, "
         "featured-image: properties.imageFormat + widgetClass. "
-        "No footer link on that /bot save. live CSS .widget-- is not documented."
+        "No footer link on that /bot save. "
+        "CSS skin is properties.class (feeds /blocks cssClass). "
+        "properties.widgetClass is not in /blocks — other/legacy, not the skin hook."
     ),
     "inputSchema": {
         "type": "object",

@@ -46,14 +46,18 @@ TOOL_SCHEMA = {
         "with body {ownerResourceInfo, widgetComponent}. "
         "The blocks response is a **JSON block tree** (widget.body.type like BlockTitle / BlockGrid, "
         "widget.cssClass when present) — not DOM HTML. Do not invent .lumx-* selectors. "
+        "widget.cssClass is the live CSS skin (from properties.class, e.g. .grok-home-news). "
+        "properties.widgetClass does not appear in /blocks — other/legacy, not the skin hook. "
         "Use class names listed from (1) widget.cssClass, (2) class attributes in any HTML string "
-        "the API or stored html-widget content actually returned. "
+        "the API or stored html-widget content actually returned. Do not invent .widget--* or .lumx-*. "
         "html widget properties.content is stored HTML from content/get (HAR did not call /blocks for html). "
         "A row is composed by calling /blocks for each cell widget — there is no row endpoint in the HAR. "
         "There is no page-level HTML endpoint in the HAR. get_content_body is extracted article text, "
         "not rendered page HTML; this tool composes per-widget /blocks plus stored html-widget markup. "
         "Call inspect_lumapps_element first for settings / Advanced fields, then this tool, "
-        "then update_global_css. Read-only: no Yes/Confirm required."
+        "then update_global_css. If settings.fields marks a key off but items[].order still "
+        "includes that same key, this tool flags that settings.fields did not win / still rendered. "
+        "Read-only: no Yes/Confirm required."
     ),
     "inputSchema": {
         "type": "object",
@@ -98,7 +102,12 @@ _OWNER_PROP_KEYS = (
     "externalKey",
 )
 
-# Property keys that may hold stored HTML (html widget content/get).
+CSS_HOOKS_LEGEND = (
+    "CSS skin = properties.class → /blocks widget.cssClass → .{token} "
+    "(e.g. grok-home-news → .grok-home-news). "
+    "properties.widgetClass (e.g. grok-news, grok-pills) does not appear in /blocks — "
+    "other/legacy, not the skin hook. Do not invent .widget--* or .lumx-*."
+)
 _STORED_HTML_KEYS = ("content", "html", "text", "body")
 
 
@@ -236,6 +245,67 @@ def css_class_from_blocks(blocks: Optional[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
+def disabled_field_names(fields: Any) -> List[str]:
+    """Names marked off in settings.fields (dict false or {enable:false}) or fields[] enable false."""
+    names: List[str] = []
+    seen: set = set()
+
+    def add(name: Any) -> None:
+        if not isinstance(name, str) or not name.strip() or name.strip() in seen:
+            return
+        seen.add(name.strip())
+        names.append(name.strip())
+
+    if isinstance(fields, dict):
+        for key, val in fields.items():
+            if val is False:
+                add(key)
+            elif isinstance(val, dict) and val.get("enable") is False:
+                add(key)
+    elif isinstance(fields, list):
+        for item in fields:
+            if isinstance(item, dict) and item.get("enable") is False:
+                add(item.get("name"))
+    return names
+
+
+def item_orders_from_blocks(blocks: Optional[Dict[str, Any]]) -> List[List[Any]]:
+    """items[].order lists from the /blocks JSON. Empty if that key is absent — do not invent."""
+    if not isinstance(blocks, dict):
+        return []
+    widget = blocks.get("widget") if isinstance(blocks.get("widget"), dict) else {}
+    body = widget.get("body") if isinstance(widget.get("body"), dict) else {}
+    items = body.get("items")
+    if not isinstance(items, list):
+        return []
+    orders: List[List[Any]] = []
+    for item in items:
+        if isinstance(item, dict) and isinstance(item.get("order"), list):
+            orders.append(item["order"])
+    return orders
+
+
+def fields_vs_render_lines(widget: Dict[str, Any], blocks: Optional[Dict[str, Any]]) -> List[str]:
+    """Compare settings.fields (off) to /blocks items[].order. Do not map names that are not in order."""
+    orders = item_orders_from_blocks(blocks)
+    if not orders:
+        return []
+    first = orders[0]
+    same = all(o == first for o in orders)
+    lines = [
+        "UI composition used blocks.widget.body.items[].order: " + json.dumps(first if same else orders)
+    ]
+    props = widget.get("properties") if isinstance(widget.get("properties"), dict) else {}
+    settings = props.get("settings") if isinstance(props.get("settings"), dict) else {}
+    off = disabled_field_names(settings.get("fields"))
+    order_tokens = {str(x) for x in first}
+    still = [name for name in off if name in order_tokens]
+    if still:
+        details = ", ".join(f"settings.fields.{n}=false but order includes {n!r}" for n in still)
+        lines.append(f"settings.fields did not win / still rendered: {details}.")
+    return lines
+
+
 def find_template_row_or_cell(
     components: List[Dict[str, Any]], node_id: str
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -330,16 +400,25 @@ def _blocks_url_type(widget: Dict[str, Any]) -> str:
 def format_class_index(entries: List[Dict[str, Any]]) -> List[str]:
     """Deduped class names from cssClass + HTML class attributes only."""
     lines = [
-        "=== Class names (from this render only; do not invent .lumx-* ) ===",
+        "=== Class names (from this render only) ===",
     ]
     seen: set = set()
     listed = False
+    leftover_widget_class: List[str] = []
+    leftover_seen: set = set()
     for entry in entries:
         css = entry.get("cssClass")
         if isinstance(css, str) and css.strip() and css.strip() not in seen:
             seen.add(css.strip())
-            lines.append(f"- .{css.strip()}  [widget.cssClass]")
+            lines.append(f"- .{css.strip()}  [widget.cssClass ← properties.class]")
             listed = True
+        payload = entry.get("payloadClasses") or {}
+        raw_wc = payload.get("widgetClass") if isinstance(payload, dict) else None
+        if isinstance(raw_wc, str):
+            for token in [t.strip() for t in raw_wc.replace(",", " ").split() if t.strip()]:
+                if token not in seen and token not in leftover_seen:
+                    leftover_seen.add(token)
+                    leftover_widget_class.append(token)
         for html_path, html in entry.get("html") or []:
             classes, tags = extract_html_classes_and_tags(html)
             for cls in classes:
@@ -352,11 +431,16 @@ def format_class_index(entries: List[Dict[str, Any]]) -> List[str]:
                     f"- (no class attributes in {html_path}; tags: {', '.join(tags)})"
                 )
                 listed = True
+    if leftover_widget_class:
+        lines.append(
+            "widgetClass tokens not in /blocks (other/legacy, not the skin hook): "
+            + ", ".join(f".{t}" for t in leftover_widget_class)
+        )
+        listed = True
     if not listed:
         lines.append(
             "- (none). /blocks returned a JSON block tree, not DOM HTML. "
-            "Do not invent .lumx-* or .widget--* selectors. "
-            "Use inspect_lumapps_element for properties.class / widgetClass payload fields."
+            "Live CSS skin is properties.class → widget.cssClass when present."
         )
     return lines
 
@@ -374,7 +458,13 @@ def format_widget_render_entry(entry: Dict[str, Any]) -> List[str]:
             f"?siteId={{siteId}}&forceDisplay=true"
         )
         css = entry.get("cssClass")
-        lines.append(f"widget.cssClass: {css if css else '(absent)'}")
+        skin = entry.get("payloadClasses") or {}
+        klass = skin.get("class") if isinstance(skin, dict) else None
+        if css:
+            note = f"  [CSS skin ← properties.class={klass!r}]" if klass else "  [CSS skin]"
+            lines.append(f"widget.cssClass: {css}{note}")
+        else:
+            lines.append("widget.cssClass: (absent)")
         blocks = entry.get("blocks")
         if isinstance(blocks, dict):
             widget = blocks.get("widget") if isinstance(blocks.get("widget"), dict) else {}
@@ -390,6 +480,8 @@ def format_widget_render_entry(entry: Dict[str, Any]) -> List[str]:
             more = {k: blocks.get(k) for k in ("more", "paginationType") if k in blocks}
             if more:
                 lines.append(f"blocks envelope: {json.dumps(more)}")
+            template_widget = entry.get("templateWidget") or {}
+            lines.extend(fields_vs_render_lines(template_widget, blocks))
     for html_path, html in entry.get("html") or []:
         classes, tags = extract_html_classes_and_tags(html)
         lines.append(f"HTML ({html_path}):")
@@ -406,10 +498,18 @@ def format_widget_render_entry(entry: Dict[str, Any]) -> List[str]:
         )
     payload = entry.get("payloadClasses") or {}
     if payload:
-        lines.append(
-            "template payload (not DOM evidence): "
-            + json.dumps(payload)
-        )
+        klass = payload.get("class")
+        wc = payload.get("widgetClass")
+        ident = payload.get("identifier")
+        bits = []
+        if klass is not None:
+            bits.append(f"properties.class={klass!r} [CSS skin]")
+        if wc is not None:
+            bits.append(f"properties.widgetClass={wc!r} [not in /blocks]")
+        if ident is not None:
+            bits.append(f"properties.identifier={ident!r}")
+        if bits:
+            lines.append("template payload: " + "; ".join(bits))
     return lines
 
 
@@ -438,6 +538,7 @@ async def render_one_widget(
         "urlType": url_type,
         "html": html,
         "payloadClasses": _payload_class_fields(widget),
+        "templateWidget": widget,
         "ids": widget_identity_ids(widget),
     }
     if not url_type:
@@ -487,6 +588,7 @@ def format_render_report(
         "Response is a JSON block tree unless a field is actual HTML.",
         "No page HTML endpoint was in the HAR. "
         "get_content_body extracts article text from the template; it is not this render.",
+        CSS_HOOKS_LEGEND,
         "",
     ]
     lines.extend(format_class_index(entries))

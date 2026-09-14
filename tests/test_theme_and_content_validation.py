@@ -20,18 +20,17 @@ import pytest
 
 from app.tools.inspect_lumapps_element import (
     MAX_CSS_EXCERPT,
+    CSS_HOOKS_LEGEND,
     _format_layout_response,
     _format_style_response,
     _format_widget_entry,
     _is_empty_style,
     _summary_components,
-    _widget_live_css,
     find_slideshow_paths,
 )
 from app.tools.widget_template import index_widget_parents
 from app.tools.save_content_page import apply_featured_image
 from app.tools.update_navigation_item import apply_menu_patch, find_item
-from app.tools.update_global_css import looks_like_css_file_path
 from app.tools.update_site_theme import apply_header, apply_palette, apply_slideshow
 from app.tools.visibility import VisibilityError, require_visibility_group, require_visibility_groups
 
@@ -123,8 +122,10 @@ def test_inspect_widget_and_full_css_flag() -> None:
     assert FULL_TEMPLATE_UUID in blob
     assert "use this id for writes" in blob
     assert "rendered:" not in blob
+    assert "widget--" not in blob
     assert "live CSS: unknown" not in blob
     assert "properties.widgetClass: 'image-arrondie, pilules-meta, newsbar'" in blob
+    assert "[not in /blocks; other/legacy]" in blob
     assert "live CSS: .widget--image-arrondie" not in blob
     assert "properties.thumbnailPosition: unset" in blob
     assert "properties.uncompressedThumbnail: unset" in blob
@@ -309,10 +310,14 @@ def test_inspect_dumps_template_only_widget_settings() -> None:
     assert "content.template.components" in text
     assert "use this id for writes" in text
     assert "properties.class" in text
-    assert "rendered: widget widget--grok-home-news" in text
+    assert "rendered: widget widget--grok-home-news" not in text
+    assert "widget widget--" not in text
+    assert ".widget--grok" not in text
+    assert CSS_HOOKS_LEGEND in text
     assert "live CSS: unknown" not in text
     assert "properties.widgetClass: 'grok-news, grok-pills'" in text
-    assert "live CSS: .widget--grok-home-news" not in text
+    assert "[CSS skin → /blocks cssClass]" in text
+    assert "[not in /blocks; other/legacy]" in text
     assert "properties.widgetClass" in text
     assert 'properties.thumbnailPosition: "background"' in text
     assert "properties.uncompressedThumbnail: true" in text
@@ -389,8 +394,11 @@ def test_inspect_unique_widget_count_pairs_layout_and_template() -> None:
     assert "use this id for writes: cb986a70-aaaa-bbbb-cccc-ddddeeeeffff" in text
     assert "layoutId: 42d2a09e-1111-2222-3333-444455556666 (also accepted via map)" in text
     assert "not writable alone" not in text
-    assert "rendered: widget widget--grok-home-news" in text
-    assert "rendered: widget widget--grok-home-links" in text
+    assert "rendered: widget widget--grok-home-news" not in text
+    assert "rendered: widget widget--grok-home-links" not in text
+    assert "widget widget--" not in text
+    assert ".widget--grok" not in text
+    assert CSS_HOOKS_LEGEND in text
     assert text.count("live CSS: unknown") == 0
     assert "live CSS: .widget--grok-home-news" not in text
     assert 'properties.thumbnailPosition: "background"' in text
@@ -417,14 +425,27 @@ def test_inspect_unique_widget_count_pairs_layout_and_template() -> None:
     assert "properties.style" in verbose
 
 
-def test_inspect_rendered_line_from_properties_class_only() -> None:
-    """BO Advanced is widget--; one short line when properties.class is set."""
-    assert _widget_live_css({"class": "grok-home-news", "widgetClass": "grok-news, grok-pills"}) == (
-        "rendered: widget widget--grok-home-news"
+def test_inspect_does_not_invent_widget_bem() -> None:
+    """Live hook is properties.class → cssClass → .token. No .widget--* line."""
+    lines = _format_widget_entry(
+        "w1",
+        "content-list",
+        {},
+        template_widget={
+            "uuid": "u1",
+            "properties": {"class": "grok-home-news", "widgetClass": "grok-news, grok-pills"},
+        },
     )
-    assert _widget_live_css({"widgetClass": "grok-news, grok-pills"}) is None
-    assert _widget_live_css({}) is None
-    assert _widget_live_css({"identifier": "home-news"}) is None
+    blob = "\n".join(lines)
+    assert "properties.class: 'grok-home-news'" in blob
+    assert "[CSS skin → /blocks cssClass]" in blob
+    assert "properties.widgetClass: 'grok-news, grok-pills'" in blob
+    assert "[not in /blocks; other/legacy]" in blob
+    assert "widget--" not in blob
+    assert "rendered:" not in blob
+    empty = _format_widget_entry("w2", "title", {}, template_widget={"uuid": "u2", "properties": {}})
+    assert "properties.class" not in "\n".join(empty)
+    assert "widget--" not in "\n".join(empty)
 
 
 def test_inspect_skips_empty_properties_style_unless_verbose() -> None:
@@ -596,9 +617,9 @@ def test_inspect_bot_home_content_save_ground_truth() -> None:
     assert "row uuid=" + row_uuid in text
     assert "cell uuid=" + cell_uuid in text
     assert "properties.class: 'grok-home-news'" in text
-    assert "[single token (content/save payload)]" in text
+    assert "[CSS skin → /blocks cssClass]" in text
     assert "properties.widgetClass: 'grok-news, grok-pills'" in text
-    assert "[comma list (content/save payload)]" in text
+    assert "[not in /blocks; other/legacy]" in text
     html_block = text.split("  • 'html'")[1].split("  • ")[0]
     assert "properties.class" not in html_block
     assert "grok-home-intro" in html_block
@@ -606,10 +627,13 @@ def test_inspect_bot_home_content_save_ground_truth() -> None:
     assert "properties.class" not in hero_block
     assert "grok-hero" in hero_block
     assert "imageFormat" in hero_block
-    assert "rendered: widget widget--grok-home-news" in text
-    assert "rendered: widget widget--grok-home-links" in text
+    assert "rendered: widget widget--grok-home-news" not in text
+    assert "rendered: widget widget--grok-home-links" not in text
+    assert "widget widget--" not in text
+    assert ".widget--grok" not in text
+    assert CSS_HOOKS_LEGEND in text
     assert "live CSS: unknown" not in text
-    assert "content/save persisted both" in text
+    assert "items[].order" in text
     assert "excerpt" in text
     assert text.count("footer link: unset") == 2
     assert "properties.settings" in text
@@ -620,34 +644,25 @@ def test_inspect_bot_home_content_save_ground_truth() -> None:
     assert "Internal only" in text
 
 
-def test_update_global_css_rejects_file_path() -> None:
-    assert looks_like_css_file_path("@/workspace/mcp-server-lumapps/site.css")
-    assert looks_like_css_file_path("/workspace/site.css")
-    assert looks_like_css_file_path("theme.css")
-    assert looks_like_css_file_path("../brand/site.css")
-    assert not looks_like_css_file_path(":root { --lumx-app-background: #fff; }")
-    assert not looks_like_css_file_path(".widget { box-shadow: none; }")
-    assert not looks_like_css_file_path("/* note */\n.a { color: red; }")
-
-
-def test_update_global_css_handle_rejects_path_without_saving() -> None:
+def test_update_global_css_rejects_huge_payload_not_path() -> None:
     import asyncio
 
-    from app.tools.update_global_css import handle
+    from app.tools.update_global_css import MAX_NEW_CSS_CHARS, handle
 
     out = asyncio.run(
         handle(
             {
                 "site_id": "674398184018341",
-                "new_css": "@/workspace/foo/site.css",
+                "new_css": "x" * (MAX_NEW_CSS_CHARS + 1),
                 "user_email": "dev@example.com",
             }
         )
     )
     text = out["content"][0]["text"]
-    assert text.startswith("400:")
-    assert "file path" in text
+    assert "too large" in text
+    assert "omit the font" in text
     assert "Nothing was saved" in text
+    assert "file path" not in text
 
 
 def test_inspect_style_dumps_header_slideshow_from_har() -> None:

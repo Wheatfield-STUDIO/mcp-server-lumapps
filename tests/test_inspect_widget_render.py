@@ -21,6 +21,7 @@ from app.tools.inspect_widget_render import (
     blocks_request_body,
     css_class_from_blocks,
     extract_html_classes_and_tags,
+    fields_vs_render_lines,
     format_class_index,
     format_render_report,
     handle,
@@ -92,6 +93,15 @@ HAR_CONTENT_LIST_BLOCKS = {
                     "title": "Data handling for customer tenants",
                     "type": "BlockPagePreview",
                     "variant": "VERTICAL",
+                    "order": [
+                        "image",
+                        "publishedAt",
+                        "tags",
+                        "title",
+                        "excerpt",
+                        "metadata",
+                        "reactions",
+                    ],
                 }
             ],
             "type": "BlockGrid",
@@ -164,6 +174,20 @@ HAR_NEWS_WIDGET = {
         "class": "grok-home-news",
         "widgetClass": "grok-news, grok-pills",
         "identifier": "home-news",
+        "fields": [
+            {"enable": False, "name": "author"},
+            {"enable": True, "name": "excerpt"},
+        ],
+        "settings": {
+            "fields": {
+                "author": False,
+                "date": True,
+                "excerpt": False,
+                "social": False,
+                "tags": True,
+                "title": True,
+            }
+        },
     },
 }
 
@@ -316,23 +340,38 @@ def test_class_index_lists_cssclass_and_html_only() -> None:
     entries = [
         {
             "cssClass": "grok-home-news",
+            "payloadClasses": {"class": "grok-home-news", "widgetClass": "grok-news, grok-pills"},
             "html": [("properties.content", HAR_HTML_WIDGET["properties"]["content"]["en"])],
         },
         {"cssClass": None, "html": []},
     ]
     blob = "\n".join(format_class_index(entries))
-    assert ".grok-home-news  [widget.cssClass]" in blob
+    assert ".grok-home-news  [widget.cssClass ← properties.class]" in blob
     assert ".lumx-typography-body1  [HTML class in properties.content]" in blob
     assert ".title  [HTML class in properties.content]" in blob
+    assert "widget widget--" not in blob
     assert ".widget--" not in blob
-    assert "grok-news" not in blob
-    assert "grok-pills" not in blob
+    assert "widgetClass tokens not in /blocks" in blob
+    assert ".grok-news" in blob
+    assert ".grok-pills" in blob
 
 
 def test_class_index_empty_when_blocks_have_no_html() -> None:
     blob = "\n".join(format_class_index([{"cssClass": None, "html": []}]))
     assert "none" in blob
-    assert "Do not invent" in blob
+    assert "Live CSS skin is properties.class" in blob
+
+
+def test_fields_vs_order_flags_excerpt_still_rendered() -> None:
+    lines = fields_vs_render_lines(HAR_NEWS_WIDGET, HAR_CONTENT_LIST_BLOCKS)
+    blob = "\n".join(lines)
+    assert "items[].order" in blob
+    assert "excerpt" in blob
+    assert "settings.fields did not win / still rendered" in blob
+    assert "settings.fields.excerpt=false" in blob
+    assert "settings.fields.social" not in blob
+    title_only = fields_vs_render_lines(HAR_TITLE_WIDGET, HAR_TITLE_BLOCKS)
+    assert title_only == []
 
 
 def test_format_render_report_states_no_page_html_endpoint() -> None:
@@ -397,7 +436,9 @@ def test_handle_one_widget_posts_har_payload() -> None:
     text = result["content"][0]["text"]
     assert "grok-home-news" in text
     assert "BlockGrid" in text
-    assert "ownerResourceInfo" in text or "widgets/content-list/blocks" in text
+    assert "settings.fields did not win / still rendered" in text
+    assert "widget widget--" not in text
+    assert ".widget--grok" not in text
 
 
 def test_handle_row_composes_cell_widgets() -> None:

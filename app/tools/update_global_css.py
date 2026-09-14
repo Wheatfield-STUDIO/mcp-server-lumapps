@@ -30,7 +30,7 @@ TOOL_NAME = "update_global_css"
 TOOL_SCHEMA = {
     "name": TOOL_NAME,
     "description": (
-        "Update the global CSS of a LumApps site via the style API. Use this tool for design system or branding: primary color, shadows, border-radius, button style, site background, etc. After search_site you can call this tool directly for :root variables. For widget or page CSS you MUST run inspect_lumapps_element first, then inspect_widget_render, and only use class names that tool listed (widget.cssClass and HTML class attributes). Do not invent .lumx-* or .widget--* selectors. Before calling, you MUST present the modification to the user and wait for their explicit 'Yes' or 'Confirm'. Never apply changes silently. "
+        "Update the global CSS of a LumApps site via the style API. Use this tool for design system or branding: primary color, shadows, border-radius, button style, site background, etc. After search_site you can call this tool directly for :root variables. For widget or page CSS you MUST run inspect_lumapps_element first, then inspect_widget_render (source of truth for live CSS hooks: properties.class → widget.cssClass → .{token}). Do not invent .lumx-* or .widget--* selectors. properties.widgetClass is not the skin hook. Before calling, you MUST present the modification to the user and wait for their explicit 'Yes' or 'Confirm'. Never apply changes silently. "
         "CSS variables: For design system changes you MUST use LumApps CSS variables from the MCP resource lumapps-css-variables (uri: lumapps://lumapps-mcp-server/css-variables). Set variables in :root (e.g. --lumx-color-primary-N, --lumx-app-background, --lumx-app-header-box-shadow, --lumx-button-border-radius, --lumx-button-emphasis-high-state-*-border-width, --lumx-text-field-state-default-theme-light-input-border-color). Do NOT use variables that are not in that resource: no --lumx-shadow-1/2/3/4/5, no --lumx-color-primary-500/600/700. Do NOT use class names not listed there (e.g. .lumx-button, .lumx-button--primary do not exist). Do NOT use raw selectors like button, [class*='button'], [class*='primary'] for theme-wide changes; use variables. Only if no variable exists (e.g. button text-transform), use a minimal override and prefer inspect_lumapps_element to get real selectors. "
         "When updating CSS: "
         "Versioning: You MUST always prepend (or update) a header comment at the very top of the stylesheet with the version (user_email) and the current date. "
@@ -45,11 +45,11 @@ TOOL_SCHEMA = {
             "new_css": {
                 "type": "string",
                 "description": (
-                    "CSS source to add or set — the stylesheet text, not a file path. "
-                    "Rejects @/…, /workspace/…, and bare .css filenames with no { } rules. "
+                    "CSS source to add or set. "
                     "Must start with the DOCUMENT INFORMATION header. "
                     "For design system/branding use LumApps CSS variables in :root "
-                    "(see resource lumapps-css-variables)."
+                    "(see resource lumapps-css-variables). "
+                    "If the stylesheet is huge (embedded font base64), split it or omit the font."
                 ),
             },
             "append": {"type": "boolean", "description": "If true, append new_css to existing CSS with a timestamp comment. If false, replace the target stylesheet content. Default true."},
@@ -60,35 +60,13 @@ TOOL_SCHEMA = {
 }
 
 
-def looks_like_css_file_path(new_css: Any) -> bool:
-    """True when new_css is a path (@/…, /workspace/…, foo.css) rather than CSS rules."""
-    if not isinstance(new_css, str):
-        return False
-    text = new_css.strip()
-    if not text:
-        return False
-    if text.startswith("@/") or text.startswith("@\\"):
-        return True
-    lowered = text.lower()
-    has_rules = "{" in text and "}" in text
-    if has_rules:
-        return False
-    if lowered.endswith(".css") or lowered.endswith(".scss") or lowered.endswith(".less"):
-        return True
-    path_prefixes = ("/workspace/", "/home/", "/users/", "/opt/", "./", "../")
-    if lowered.startswith(path_prefixes) or text.startswith("\\"):
-        return True
-    return False
+MAX_NEW_CSS_CHARS = 400_000
 
 
-def _path_rejected_message(new_css: str) -> str:
-    shown = new_css.strip()
-    if len(shown) > 160:
-        shown = shown[:160] + "…"
+def _css_too_large_message(new_css: str) -> str:
     return (
-        "400: new_css looks like a file path "
-        f"({shown!r}). Pass the CSS source (rules with {{ }}), not @/workspace/… or a .css filename. "
-        "Nothing was saved to the theme."
+        f"new_css is too large ({len(new_css)} chars). "
+        "Split the stylesheet or omit the font (base64). Nothing was saved."
     )
 
 
@@ -113,8 +91,8 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Missing 'new_css' argument")
     if not user_email:
         raise ValueError("Missing 'user_email' argument")
-    if looks_like_css_file_path(new_css):
-        return {"content": [{"type": "text", "text": _path_rejected_message(str(new_css))}]}
+    if isinstance(new_css, str) and len(new_css) > MAX_NEW_CSS_CHARS:
+        return {"content": [{"type": "text", "text": _css_too_large_message(new_css)}]}
 
     logger.info(f"Executing update_global_css site_id={site_id}, append={append}")
     try:

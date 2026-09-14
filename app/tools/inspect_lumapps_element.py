@@ -43,8 +43,9 @@ TOOL_SCHEMA = {
         "Use site_id + user_email for the site theme. "
         "One line per widget. 'use this id for writes' is the content.template uuid "
         "(layoutId is also accepted via map). "
-        "When properties.class is set, one line: rendered: widget widget--{class}. "
-        "Stay silent if class is absent. Do not repeat a live-CSS disclaimer. "
+        "CSS skin = properties.class (feeds /blocks widget.cssClass, selector .{class}). "
+        "properties.widgetClass does not appear in /blocks — other/legacy, not the skin hook. "
+        "Say that once; do not invent .widget--*. inspect_widget_render is the source of truth. "
         "content-list dumps thumbnailPosition / uncompressedThumbnail (not 'cover'). "
         "settings.fields vs properties.fields[]: content/save persisted both (HAR req==resp). "
         "Inspect properties.settings plus sibling keys the BO saved (viewMode, perLine, …). "
@@ -92,12 +93,19 @@ MAX_CSS_EXCERPT = 8000
 
 _ADVANCED_CLASS_KEYS = ("class", "widgetClass", "identifier", "classes", "classNames")
 _ADVANCED_FIELD_NOTES = {
-    "class": "single token (content/save payload)",
-    "widgetClass": "comma list (content/save payload)",
+    "class": "CSS skin → /blocks cssClass",
+    "widgetClass": "not in /blocks; other/legacy",
     "identifier": "identifier (content/save payload)",
     "classes": "extra classes",
     "classNames": "classNames",
 }
+
+CSS_HOOKS_LEGEND = (
+    "CSS skin = properties.class (feeds /blocks widget.cssClass, e.g. .grok-home-news). "
+    "properties.widgetClass (e.g. grok-news, grok-pills) does not appear in /blocks — "
+    "other/legacy, not the skin hook. inspect_widget_render is the source of truth. "
+    "Do not invent .widget--*."
+)
 
 # Sibling keys observed on /bot content/save template widgets (HAR 2026-09-14).
 _SIBLING_KEYS = (
@@ -174,26 +182,8 @@ def _fmt_or_unset(value: Any) -> str:
     return json.dumps(value)
 
 
-def _nonempty_class_token(value: Any) -> Optional[str]:
-    if value is None or (isinstance(value, str) and not str(value).strip()):
-        return None
-    return str(value).strip()
-
-
-def _widget_live_css(props: Dict[str, Any]) -> Optional[str]:
-    """BO Advanced tab is widget--; payload key is properties.class. One short line or silent."""
-    props = props if isinstance(props, dict) else {}
-    klass = _nonempty_class_token(props.get("class"))
-    if not klass:
-        return None
-    token = klass.replace(",", " ").split()[0]
-    if not token:
-        return None
-    return f"rendered: widget widget--{token}"
-
-
 def _fields_honor_lines(w_type: str, props: Dict[str, Any], settings: Any) -> List[str]:
-    """content/save HAR: both settings.fields and properties.fields[] were stored unchanged."""
+    """content/save HAR: both settings.fields and properties.fields[] were stored. Front uses /blocks order."""
     if normalize_widget_type(w_type) != "content-list":
         return []
     props = props if isinstance(props, dict) else {}
@@ -203,12 +193,10 @@ def _fields_honor_lines(w_type: str, props: Dict[str, Any], settings: Any) -> Li
     if settings_fields is None and array_fields is None:
         return []
     return [
-        "      fields: content/save persisted both (HAR request === response; no rewrite). "
-        "settings.fields is the typed bag "
-        f"({json.dumps(settings_fields) if settings_fields is not None else 'absent'}); "
-        "properties.fields[] is the legacy array "
-        f"({json.dumps(array_fields) if array_fields is not None else 'absent'}). "
-        "They can disagree (excerpt/social). Save does not pick a winner — write the bag you mean."
+        "      fields: content/save persisted both bags "
+        f"(settings.fields={json.dumps(settings_fields) if settings_fields is not None else 'absent'}; "
+        f"properties.fields[]={json.dumps(array_fields) if array_fields is not None else 'absent'}). "
+        "What the UI composed is inspect_widget_render /blocks items[].order — not these bags."
     ]
 
 
@@ -367,9 +355,6 @@ def _format_widget_entry(
             suffix = f"  [{note}]" if note else ""
             lines.append(f"      properties.{key}: {props.get(key)!r}{suffix}")
 
-    live_css = _widget_live_css(props)
-    if live_css:
-        lines.append(f"      {live_css}")
     lines.extend(_fields_honor_lines(w_type, props, settings))
     lines.extend(_visual_lines(w_type, props, settings))
 
@@ -458,6 +443,7 @@ def _format_layout_response(
     lines.append(
         "--- Widgets (one line per widget; use this id for writes = template uuid) ---"
     )
+    lines.append(CSS_HOOKS_LEGEND)
     for raw, template_widget in page_widgets:
         node = template_widget or raw or {}
         write_id = writable_template_id(template_widget)

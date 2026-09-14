@@ -197,7 +197,7 @@ Credentials stay inside your perimeter; use your existing secret management (e.g
 
 The tool schemas for **`update_widget_style`**, **`update_global_css`** and **`update_site_global_settings`** instruct the AI to follow strict rules so changes are never applied without user consent:
 
-1. **Always run `inspect_lumapps_element` first** — to get accurate `content_id`/`widget_id` or to target the right elements before changing CSS. For widget or page CSS, then run **`inspect_widget_render`** and only use class names it listed (`widget.cssClass`, HTML `class` attributes). Do not invent `.lumx-*` selectors.
+1. **Always run `inspect_lumapps_element` first** — to get accurate `content_id`/`widget_id` or to target the right elements before changing CSS. For widget or page CSS, then run **`inspect_widget_render`** (source of truth for live CSS hooks: `properties.class` → `widget.cssClass` → `.token`). Do not invent `.lumx-*` or `.widget--*` selectors. `properties.widgetClass` is not the skin hook.
 2. **Present the modification to the user** — describe or show what will be changed (no need to expose raw JSON or CSS unless useful).
 3. **Wait for explicit confirmation** — do not call the tool until the user has replied with "Yes" or "Confirm" (or equivalent) in the chat.
 4. **Never apply changes silently** — the AI must not invoke these tools without having obtained confirmation.
