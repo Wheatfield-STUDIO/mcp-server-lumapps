@@ -26,6 +26,7 @@ from app.tools.set_content_layout import (
     build_template_components,
     format_layout_result,
     handle,
+    normalize_status,
     sanitize_content_list_properties,
 )
 from app.tools.widget_template import collect_template_widgets, save_content_template_components
@@ -85,6 +86,9 @@ def test_schema_is_update_only_native_grid() -> None:
 
     assert TOOL_NAME in TOOLS
     assert TOOL_SCHEMA["name"] == "set_content_layout"
+    props = TOOL_SCHEMA["inputSchema"]["properties"]
+    assert "status" in props
+    assert "LIVE" in props["status"]["description"]
     desc = TOOL_SCHEMA["description"]
     assert "content-list" in desc
     assert "HTML widget" in desc or "html" in desc.lower()
@@ -92,6 +96,19 @@ def test_schema_is_update_only_native_grid() -> None:
     assert "Yes" in desc
     assert "inspect_lumapps_element" in desc
     assert "html_path" not in desc
+    assert "typically DRAFT" not in desc
+    assert "typically DRAFT" not in props["mode"]["description"]
+    assert "LIVE" in desc
+
+
+def test_normalize_status_defaults_live() -> None:
+    assert normalize_status(None) == "LIVE"
+    assert normalize_status("") == "LIVE"
+    assert normalize_status("live") == "LIVE"
+    assert normalize_status("LIVE") == "LIVE"
+    assert normalize_status("DRAFT") == "DRAFT"
+    with pytest.raises(ValueError, match="LIVE or DRAFT"):
+        normalize_status("published")
 
 
 def test_sanitize_rejects_invented_settings_keys() -> None:
@@ -207,34 +224,41 @@ def test_handle_refuses_create_and_html_rows() -> None:
     assert "content-list" in html["content"][0]["text"]
 
 
-def test_handle_gets_then_saves_and_returns_ids() -> None:
+def test_handle_gets_then_saves_live_revision() -> None:
     page = {
         "uid": EMPTY_PAGE_ID,
+        "id": EMPTY_PAGE_ID,
         "version": 4,
+        "lastRevision": 4,
         "status": "DRAFT",
         "template": {"components": []},
     }
     saved = {
         "uid": EMPTY_PAGE_ID,
         "version": 5,
-        "status": "DRAFT",
+        "lastRevision": 5,
+        "status": "LIVE",
         "template": {"components": []},
     }
 
     async def _get(content_id, token):
         assert content_id == EMPTY_PAGE_ID
         assert token == "admin-tok"
-        return page
+        return dict(page)
 
     async def _save(*, token, data, send_notifications=True):
         assert token == "admin-tok"
         assert send_notifications is False
         assert data["uid"] == EMPTY_PAGE_ID
+        assert data["version"] == 4
+        assert data["lastRevision"] == 4
+        assert data["status"] == "LIVE"
         widgets = collect_template_widgets(data["template"]["components"])
         assert len(widgets) == 3
         assert all(w["widgetType"] == "content-list" for w in widgets)
-        saved["template"] = data["template"]
-        return saved
+        out = dict(saved)
+        out["template"] = data["template"]
+        return out
 
     with (
         patch("app.tools.set_content_layout.lumapps_auth.get_token", new_callable=AsyncMock) as gt,
@@ -258,6 +282,8 @@ def test_handle_gets_then_saves_and_returns_ids() -> None:
     assert "Content layout updated" in text
     assert f"content_id={EMPTY_PAGE_ID}" in text
     assert "version=5" in text
+    assert "status=LIVE" in text
+    assert "lastRevision=5" in text
     assert "top-news-homepage" in text
     assert "other-news-homepage" in text
     assert "announcements-homepage" in text
@@ -269,20 +295,32 @@ def test_handle_gets_then_saves_and_returns_ids() -> None:
     assert sc.call_count == 1
 
 
-def test_second_save_gets_current_revision() -> None:
-    """Two writes each GET before content/save (CONTENT_NOT_UP_TO_DATE)."""
-    versions = {"n": 1}
+def test_second_save_uses_revision_just_read() -> None:
+    """Each write GETs then saves that version/lastRevision (CONTENT_NOT_UP_TO_DATE)."""
+    store = {"version": 1, "lastRevision": 1}
 
     async def _get(content_id, token):
         return {
             "uid": EMPTY_PAGE_ID,
-            "version": versions["n"],
+            "version": store["version"],
+            "lastRevision": store["lastRevision"],
+            "status": "LIVE",
             "template": {"components": []},
         }
 
     async def _save(*, token, data, send_notifications=True):
-        versions["n"] = data["version"] + 1
-        return {"uid": EMPTY_PAGE_ID, "version": versions["n"], "template": data["template"]}
+        assert data["version"] == store["version"]
+        assert data["lastRevision"] == store["lastRevision"]
+        assert data["status"] == "LIVE"
+        store["version"] = data["version"] + 1
+        store["lastRevision"] = data["lastRevision"] + 1
+        return {
+            "uid": EMPTY_PAGE_ID,
+            "version": store["version"],
+            "lastRevision": store["lastRevision"],
+            "status": data["status"],
+            "template": data["template"],
+        }
 
     with (
         patch("app.tools.widget_template.lumapps_client.get_content", new_callable=AsyncMock) as gc,
@@ -290,34 +328,66 @@ def test_second_save_gets_current_revision() -> None:
     ):
         gc.side_effect = _get
         sc.side_effect = _save
-        first, _ = asyncio.run(
+        first, sent1 = asyncio.run(
             save_content_template_components(
                 EMPTY_PAGE_ID,
                 build_template_components(HOME_2026_ROWS[:1]),
                 "admin-tok",
+                status="LIVE",
             )
         )
-        second, _ = asyncio.run(
+        second, sent2 = asyncio.run(
             save_content_template_components(
                 EMPTY_PAGE_ID,
                 build_template_components(HOME_2026_ROWS),
                 "admin-tok",
+                status="LIVE",
             )
         )
     assert gc.call_count == 2
     assert sc.call_count == 2
+    assert sent1["version"] == 1 and sent1["lastRevision"] == 1
+    assert sent2["version"] == 2 and sent2["lastRevision"] == 2
     assert first["version"] == 2
     assert second["version"] == 3
     assert len(collect_template_widgets(second["template"]["components"])) == 3
+
+
+def test_refuses_save_without_revision() -> None:
+    async def _get(content_id, token):
+        return {"uid": EMPTY_PAGE_ID, "template": {"components": []}}
+
+    with (
+        patch("app.tools.widget_template.lumapps_client.get_content", new_callable=AsyncMock) as gc,
+        patch("app.tools.widget_template.lumapps_client.save_content", new_callable=AsyncMock) as sc,
+    ):
+        gc.side_effect = _get
+        with pytest.raises(ValueError, match="lastRevision"):
+            asyncio.run(
+                save_content_template_components(
+                    EMPTY_PAGE_ID,
+                    build_template_components(HOME_2026_ROWS[:1]),
+                    "admin-tok",
+                    status="LIVE",
+                )
+            )
+    sc.assert_not_called()
 
 
 def test_format_result_lists_ids() -> None:
     components = build_template_components(HOME_2026_ROWS[:1])
     text = format_layout_result(
         content_id=EMPTY_PAGE_ID,
-        saved={"uid": EMPTY_PAGE_ID, "version": 7, "status": "DRAFT", "template": {"components": components}},
+        saved={
+            "uid": EMPTY_PAGE_ID,
+            "version": 7,
+            "lastRevision": 7,
+            "status": "LIVE",
+            "template": {"components": components},
+        },
         components=components,
     )
     assert "version=7" in text
+    assert "status=LIVE" in text
     assert components[0]["cells"][0]["components"][0]["uuid"] in text
     assert "skin: .top-news-homepage → .widget--top-news-homepage" in text

@@ -71,8 +71,9 @@ TOOL_SCHEMA = {
         "Write a native LumApps **content-list** grid into `content.template` of an **existing** page. "
         "Does **not** use an HTML widget or `save_content_page` body_widgets (html/title only). "
         "`update_widget_style` / `update_widget_settings` cannot create a missing widget — this tool places them. "
-        "mode=update: GET content/get → replace template.components → content/save (same serialize/version lock "
-        "as other writes; a second call must not die CONTENT_NOT_UP_TO_DATE). "
+        "mode=update: GET content/get, then one content/save of content.template using the "
+        "version / lastRevision just read (so the save is not stale / CONTENT_NOT_UP_TO_DATE). "
+        "status defaults to LIVE — useful edits publish in this same save, not a follow-up save_content_page. "
         "rows[] → cells (width) → content-list widgets. Allowed properties only: "
         "viewMode, perLine, thumbnailPosition, uncompressedThumbnail, customContentType (ids), "
         "fields as [{enable, name}] (title, excerpt, author, publication-date, tags, metadata, social), "
@@ -95,7 +96,14 @@ TOOL_SCHEMA = {
             },
             "mode": {
                 "type": "string",
-                "description": "Must be update (existing page, typically DRAFT). Create is refused.",
+                "description": "Must be update (existing page). Create is refused.",
+            },
+            "status": {
+                "type": "string",
+                "description": (
+                    "LIVE (default) or DRAFT. Useful layout edits publish LIVE in this same "
+                    "content/save — not a separate DRAFT and not a follow-up save_content_page."
+                ),
             },
             "rows": {
                 "type": "array",
@@ -314,10 +322,37 @@ def build_template_components(rows: Any) -> List[Dict[str, Any]]:
     return components
 
 
+_STATUS_MAP = {
+    "draft": "DRAFT",
+    "live": "LIVE",
+    "DRAFT": "DRAFT",
+    "LIVE": "LIVE",
+}
+
+
+def normalize_status(raw: Any) -> str:
+    """Default LIVE. Useful edits publish in the same save."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return "LIVE"
+    if not isinstance(raw, str):
+        raise ValueError("status must be LIVE or DRAFT.")
+    mapped = _STATUS_MAP.get(raw.strip()) or _STATUS_MAP.get(raw.strip().lower())
+    if not mapped:
+        raise ValueError("status must be LIVE or DRAFT.")
+    return mapped
+
+
 def _version_of(content: Dict[str, Any]) -> Any:
-    for key in ("version", "revision", "revisionNumber"):
-        if content.get(key) is not None:
-            return content.get(key)
+    """Prefer content.version, then lastRevision (scalar or {version}). Do not invent keys."""
+    if not isinstance(content, dict):
+        return None
+    if content.get("version") is not None:
+        return content.get("version")
+    last = content.get("lastRevision")
+    if isinstance(last, dict) and last.get("version") is not None:
+        return last.get("version")
+    if last is not None:
+        return last
     return None
 
 
@@ -339,9 +374,11 @@ def format_layout_result(
     version = _version_of(saved)
     status = saved.get("status") or "—"
     widgets = collect_template_widgets((saved.get("template") or {}).get("components") or components)
+    last_rev = saved.get("lastRevision") if isinstance(saved, dict) else None
+    last_bit = f" lastRevision={last_rev}" if last_rev is not None else ""
     lines = [
         f"Content layout updated. content_id={uid} version={version if version is not None else '—'} "
-        f"status={status}",
+        f"status={status}{last_bit}",
         "Native content-list widgets (not HTML):",
     ]
     for widget in widgets:
@@ -381,6 +418,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     try:
+        status = normalize_status(arguments.get("status"))
         components = build_template_components(arguments.get("rows"))
     except json.JSONDecodeError as exc:
         return {"content": [{"type": "text", "text": f"Invalid rows JSON: {exc}"}]}
@@ -405,7 +443,9 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         return {"content": [{"type": "text", "text": text}]}
 
     try:
-        saved, _sent = await save_content_template_components(content_id, components, token)
+        saved, _sent = await save_content_template_components(
+            content_id, components, token, status=status
+        )
     except Exception as exc:
         logger.exception("set_content_layout save failed")
         text = (

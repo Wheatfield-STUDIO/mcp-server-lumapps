@@ -469,27 +469,65 @@ async def save_widget_template_patch(
         return True, "Content saved.", target
 
 
+_REVISION_KEYS = ("version", "lastRevision")
+
+
+def snapshot_revision(content: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy version / lastRevision from a content/get body. Do not invent values."""
+    if not isinstance(content, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    for key in _REVISION_KEYS:
+        if key in content and content[key] is not None:
+            out[key] = content[key]
+    return out
+
+
+def apply_revision(content: Dict[str, Any], revision: Dict[str, Any]) -> None:
+    """Write the GET revision back onto the save payload so content/save is not stale."""
+    for key, value in revision.items():
+        content[key] = value
+
+
+def revision_or_raise(content: Dict[str, Any]) -> Dict[str, Any]:
+    """Refuse a save that has no version or lastRevision from the GET just read."""
+    revision = snapshot_revision(content)
+    if not revision:
+        raise ValueError(
+            "content/get had no version or lastRevision. "
+            "Refusing content/save so the write is not stale (CONTENT_NOT_UP_TO_DATE)."
+        )
+    return revision
+
+
 async def save_content_template_components(
     content_id: str,
     components: List[Dict[str, Any]],
     token: str,
+    *,
+    status: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
-    GET current content (revision), replace template.components, save.
-    Same per-content_id lock as widget patches so a second call does not hit
-    CONTENT_NOT_UP_TO_DATE. Returns (saved_or_sent, sent_content).
+    GET current content, pin version/lastRevision from that GET, replace
+    template.components (and status when given), then content/save once.
+    Same per-content_id lock as widget patches. Returns (saved_or_sent, sent_content).
     """
     lock = await _lock_for_content(content_id)
     async with lock:
         content = await lumapps_client.get_content(content_id, token=token)
+        if not isinstance(content, dict):
+            raise ValueError("content/get did not return a content object.")
+        revision = revision_or_raise(content)
         template = content.get("template")
         if not isinstance(template, dict):
             template = {}
-            content["template"] = template
         else:
             template = dict(template)
-            content["template"] = template
         template["components"] = components
+        content["template"] = template
+        if status:
+            content["status"] = status
+        apply_revision(content, revision)
         saved = await lumapps_client.save_content(token=token, data=content, send_notifications=False)
         if not isinstance(saved, dict) or not saved:
             saved = content
