@@ -39,6 +39,7 @@ from app.tools import (
     update_widget_settings,
     update_site_theme,
     save_content_page,
+    set_content_layout,
     list_directories,
     upsert_directory_entry,
     inspect_navigation,
@@ -77,6 +78,7 @@ def _build_registry() -> None:
     _register(update_widget_settings.TOOL_SCHEMA, update_widget_settings.handle)
     _register(update_site_theme.TOOL_SCHEMA, update_site_theme.handle)
     _register(save_content_page.TOOL_SCHEMA, save_content_page.handle)
+    _register(set_content_layout.TOOL_SCHEMA, set_content_layout.handle)
     _register(list_directories.TOOL_SCHEMA, list_directories.handle)
     _register(upsert_directory_entry.TOOL_SCHEMA, upsert_directory_entry.handle)
     _register(inspect_navigation.TOOL_SCHEMA, inspect_navigation.handle)

@@ -467,3 +467,30 @@ async def save_widget_template_patch(
 
         await lumapps_client.save_content(token=token, data=content, send_notifications=False)
         return True, "Content saved.", target
+
+
+async def save_content_template_components(
+    content_id: str,
+    components: List[Dict[str, Any]],
+    token: str,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    GET current content (revision), replace template.components, save.
+    Same per-content_id lock as widget patches so a second call does not hit
+    CONTENT_NOT_UP_TO_DATE. Returns (saved_or_sent, sent_content).
+    """
+    lock = await _lock_for_content(content_id)
+    async with lock:
+        content = await lumapps_client.get_content(content_id, token=token)
+        template = content.get("template")
+        if not isinstance(template, dict):
+            template = {}
+            content["template"] = template
+        else:
+            template = dict(template)
+            content["template"] = template
+        template["components"] = components
+        saved = await lumapps_client.save_content(token=token, data=content, send_notifications=False)
+        if not isinstance(saved, dict) or not saved:
+            saved = content
+        return saved, content

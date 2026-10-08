@@ -42,6 +42,7 @@ def test_get_tool_sensitivity() -> None:
     assert get_tool_sensitivity("update_widget_style") == "content"
     assert get_tool_sensitivity("update_widget_settings") == "content"
     assert get_tool_sensitivity("save_content_page") == "content"
+    assert get_tool_sensitivity("set_content_layout") == "content"
     assert get_tool_sensitivity("upsert_directory_entry") == "content"
     assert get_tool_sensitivity("update_global_css") == "structural"
     assert get_tool_sensitivity("update_site_global_settings") == "structural"
@@ -83,6 +84,7 @@ def test_new_write_tools_with_api_key_denied(client: TestClient) -> None:
         ("update_widget_settings", {"content_id": "c1", "widget_id": "w1", "settings_updates": "{}", "user_email": "dev@example.com"}),
         ("update_site_theme", {"site_id": "site-123", "palette": {"primary": "#000"}, "user_email": "dev@example.com"}),
         ("save_content_page", {"site_id": "site-123", "mode": "create", "title": "T", "user_email": "dev@example.com"}),
+        ("set_content_layout", {"content_id": "c1", "mode": "update", "rows": [], "user_email": "dev@example.com"}),
         ("upsert_directory_entry", {"directory_id": "d1", "title": "Link", "url": "https://x", "user_email": "dev@example.com"}),
         ("update_navigation_item", {"site_id": "site-123", "item_id": "n1", "label": "Home", "user_email": "dev@example.com"}),
         ("inspect_navigation", {"site_id": "site-123", "user_email": "dev@example.com"}),
@@ -335,7 +337,7 @@ def test_resolve_target_site_id_new_content_tools() -> None:
     """New content tools resolve content_id the same way as update_widget_style."""
     from app.services.lumapps_client import lumapps_client
     with patch.object(lumapps_client, "get_content", new_callable=AsyncMock, return_value={"instance": {"uid": "site-from-content"}}):
-        for tool in ("update_widget_settings", "save_content_page"):
+        for tool in ("update_widget_settings", "save_content_page", "set_content_layout"):
             out = asyncio.run(resolve_target_site_id(tool, {"content_id": "c-new"}, token="fake-token"))
             assert out == "site-from-content"
 

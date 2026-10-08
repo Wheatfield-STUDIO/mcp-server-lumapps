@@ -46,6 +46,7 @@ CONTENT_TOOLS: Set[str] = {
     "inspect_widget_render",
     "inspect_front_html",
     "save_content_page",
+    "set_content_layout",
     "upsert_directory_entry",
 }
 # All other tools are read-only
@@ -67,6 +68,7 @@ _CONTENT_ID_SITE_TOOLS: Set[str] = {
     "inspect_widget_render",
     "inspect_front_html",
     "save_content_page",
+    "set_content_layout",
 }
 # Tools that resolve directory_id → site_id when site_id is omitted.
 _DIRECTORY_ID_SITE_TOOLS: Set[str] = {

@@ -105,7 +105,7 @@ LumApps OAuth applications are created with a fixed scope: **all.read** (read-on
 | Purpose                   | Env vars                                                                                                   | LumApps scope | Tools                                                                                                             |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
 | **Read (end users + inspect)** | `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`) | **all.read**  | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`, `inspect_lumapps_element`, `inspect_widget_render`, `inspect_front_html`, `inspect_navigation` |
-| **Admin (writes)**        | `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`                                            | **all.admin** | `update_widget_style`, `update_widget_settings`, `update_global_css`, `update_site_global_settings`, `update_site_theme`, `save_content_page`, `upsert_directory_entry`, `update_navigation_item` |
+| **Admin (writes)**        | `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`                                            | **all.admin** | `update_widget_style`, `update_widget_settings`, `set_content_layout`, `update_global_css`, `update_site_global_settings`, `update_site_theme`, `save_content_page`, `upsert_directory_entry`, `update_navigation_item` |
 
 - **Recommended setup**: Create **two OAuth applications** in LumApps for the same organization: one with **all.read** (for search and inspect), one with **all.admin** (for writes). Set the read app in `LUMAPPS_READ_CLIENT_ID`/`LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`) and the admin app in `LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`. The server will use the read app for read/inspect tools and the admin app for modification tools; tokens are cached per user and per profile.
 - **Read-only deployment**: If you only set the read credentials, **inspect works** (`inspect_lumapps_element`, `inspect_widget_render`, `inspect_front_html`, `inspect_navigation`). `inspect_front_html` does not call the LumApps API for pasted HTML. Write tools still require the admin app; calling them without `LUMAPPS_ADMIN_*` returns a clear error.
@@ -189,6 +189,7 @@ Credentials stay inside your perimeter; use your existing secret management (e.g
 | `inspect_navigation`          | Inspect the site navigation tree                                             | Structural | read (all.read)       |
 | `update_global_css`           | Update site global CSS                                                       | Structural | admin (all.admin)     |
 | `update_widget_style`         | Update a widget's style on a page                                            | Content    | admin + canEdit       |
+| `set_content_layout`          | Place native content-list widgets on an existing page (`content.template`)   | Content    | admin + canEdit       |
 | `update_site_global_settings` | Update site footer HTML and/or head scripts                                  | Structural | admin                 |
 
 - **Level**: RBAC sensitivity. **Read** = any authenticated user. **Content** = Contributor or Admin on the page/site (inspect + widget style). **Structural** = Site Administrator only (global CSS, global settings).
@@ -196,7 +197,7 @@ Credentials stay inside your perimeter; use your existing secret management (e.g
 
 ### Conduct rules for modification tools
 
-The tool schemas for **`update_widget_style`**, **`update_global_css`** and **`update_site_global_settings`** instruct the AI to follow strict rules so changes are never applied without user consent:
+The tool schemas for **`update_widget_style`**, **`set_content_layout`**, **`update_global_css`** and **`update_site_global_settings`** instruct the AI to follow strict rules so changes are never applied without user consent:
 
 1. **Always run `inspect_lumapps_element` first** — stored settings / `content_id`. Then **`inspect_widget_render`** for `/blocks` `cssClass` (token). Live CSS is `skin: .{cssClass} → .widget--{cssClass}` (proven content-list / directory). For deep widget CSS (`.lumx-*`, inner title/span) run **`inspect_front_html`** with pasted outerHTML (not a local filesystem path). Do not invent `.lumx-*` from `/blocks`. Classes listed by `inspect_front_html` are legitimate. `properties.widgetClass` is not the skin hook.
 2. **Present the modification to the user** — describe or show what will be changed (no need to expose raw JSON or CSS unless useful).
