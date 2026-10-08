@@ -30,6 +30,8 @@ TOOL_SCHEMA = {
     "name": TOOL_NAME,
     "description": (
         "Fetch the **full article body** for one content_id: complete text, author, date, tags, attachments. "
+        "This is extracted text from content.template (and excerpt fallback), not rendered page HTML. "
+        "It does not return LumApps DOM classes. For widget/page markup and class names use inspect_widget_render. "
         "The content_id is returned by search_content for each result. Call this when the user asks for a detailed summary, 'tell me more', or analysis of an article — do not rely on search excerpts for that. You can call it for 1 or 2 of the most relevant results after search_content."
     ),
     "inputSchema": {

@@ -25,7 +25,7 @@ We ask that you verify your modifications using the [MCP Inspector](https://gith
 3. **Connect to the server** in the Inspector:
    - Choose the **Streamable HTTP** transport.
    - Server URL: `http://localhost:8000/mcp`
-   - Set the **Bearer Token** (or add `?apiKey=YOUR_MCP_API_KEY` to the URL) to the value of `MCP_API_KEY` from your `.env`.
+   - Set the **Bearer Token** to `MCP_API_KEY` from your `.env`, or send `X-API-Key`. Query-string `?apiKey=` / `?token=` are rejected.
    - Click **Connect**.
 
 4. **Exercise the tools**: use the Inspector to call `tools/list`, then run the tool(s) you changed (e.g. `tools/call` with the appropriate `name` and `arguments`). Check that responses and errors match what you expect.

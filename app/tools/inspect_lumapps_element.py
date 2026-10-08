@@ -12,13 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Inspect a LumApps page layout (widgets, styles) or site global CSS via API. No browser."""
+"""Inspect a LumApps page layout (widgets, settings, Advanced classes) or site theme via API. No browser."""
 
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.tools.api_error_utils import format_api_error
+from app.tools.css_hooks import SKIN_BRIDGE_LEGEND, skin_bridge_line
+from app.tools.widget_template import (
+    index_widget_parents,
+    normalize_widget_type,
+    pair_layout_and_template,
+    widget_identity_ids,
+    widget_type_of,
+    writable_template_id,
+)
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
 
@@ -28,19 +37,109 @@ TOOL_NAME = "inspect_lumapps_element"
 
 TOOL_SCHEMA = {
     "name": TOOL_NAME,
-    "description": "Inspect a LumApps page layout (widgets, padding, margin, border, title text) or the site global CSS. Use content_id + user_email to get the page layout (e.g. homepage) and see why a widget looks wrong (e.g. title too high). Use site_id + user_email to get the site's global stylesheets. No browser; works via API. Use the result to fix layout via update_global_css or future layout API.",
+    "description": (
+        "Inspect a LumApps page layout (widgets, settings, Advanced classes, padding) or the site theme "
+        "(style.properties palette/header/slideshow, instance.head, stylesheets). "
+        "Use content_id + user_email for a page (layout v2 + content.template). "
+        "Use site_id + user_email for the site theme. "
+        "One line per widget. 'use this id for writes' is the content.template uuid "
+        "(layoutId is also accepted via map). "
+        "CSS skin: skin: .{cssClass} → .widget--{cssClass} "
+        "(/blocks stays the token; CSS targets the prefixed class; proven content-list / directory). "
+        "Do not pick token vs prefixed at random. "
+        "properties.widgetClass does not appear in /blocks — other/legacy, not the skin hook. "
+        "inspect_widget_render is the source of truth for /blocks cssClass. "
+        "For deep widget CSS (.lumx-*, inner title/span) use inspect_front_html with pasted outerHTML — "
+        "/blocks never has LumX DOM classes; do not invent .lumx-* from it. "
+        "content-list dumps thumbnailPosition / uncompressedThumbnail (not 'cover'). "
+        "settings.fields vs properties.fields[]: content/save persisted both (HAR req==resp). "
+        "Inspect properties.settings plus sibling keys the BO saved (viewMode, perLine, …). "
+        "Footer link is unset only when that field is absent. "
+        "Parent prints template row uuid / cell uuid when present. "
+        "Empty properties.style is omitted unless verbose=true. "
+        "Writes are content/save (HAR). For rendered markup / class names, call "
+        "inspect_widget_render (POST /widgets/{type}/blocks with ownerResourceInfo). "
+        "Set full=true for complete custom CSS. Set verbose=true for both component trees "
+        "and empty style dumps. "
+        "No browser; works via API. Use the result to prepare a safe write "
+        "(update_widget_settings, update_widget_style, update_site_theme, update_global_css). "
+        "For widget CSS: inspect_lumapps_element, then inspect_widget_render, then inspect_front_html "
+        "(pasted outerHTML for .lumx-*), then update_global_css. "
+        "This tool is read-only: no Yes/Confirm is required."
+    ),
     "inputSchema": {
         "type": "object",
         "properties": {
-            "content_id": {"type": "string", "description": "LumApps content/page ID (e.g. homepage content ID). Use with user_email to get the page layout (widgets and their styles)."},
-            "site_id": {"type": "string", "description": "LumApps site/instance ID. Use with user_email to get the site global CSS (stylesheets)."},
-            "user_email": {"type": "string", "description": "User email for LumApps API token (required for both layout and style inspection)."},
+            "content_id": {
+                "type": "string",
+                "description": "LumApps content/page ID. Use with user_email to inspect widgets, settings, Advanced classes, footer, and row/cell parents.",
+            },
+            "site_id": {
+                "type": "string",
+                "description": "LumApps site/instance ID. Use with user_email to inspect style.properties, instance.head, and stylesheets.",
+            },
+            "user_email": {
+                "type": "string",
+                "description": "User email for LumApps API token (required for both layout and style inspection).",
+            },
+            "full": {
+                "type": "boolean",
+                "description": "If true, do not truncate custom CSS (default false, 8000-char excerpt).",
+            },
+            "verbose": {
+                "type": "boolean",
+                "description": "If true, print both layout.components and content.template.components trees, and dump empty properties.style. Default: one tree (template if present, else layout); skip empty style.",
+            },
         },
         "required": [],
     },
 }
 
 MAX_CSS_EXCERPT = 8000
+
+_ADVANCED_CLASS_KEYS = ("class", "widgetClass", "identifier", "classes", "classNames")
+_ADVANCED_FIELD_NOTES = {
+    "class": "CSS skin → /blocks cssClass",
+    "widgetClass": "not in /blocks; other/legacy",
+    "identifier": "identifier (content/save payload)",
+    "classes": "extra classes",
+    "classNames": "classNames",
+}
+
+CSS_HOOKS_LEGEND = SKIN_BRIDGE_LEGEND
+
+# Sibling keys observed on /bot content/save template widgets (HAR 2026-09-14).
+_SIBLING_KEYS = (
+    "viewMode",
+    "viewModeVariant",
+    "perLine",
+    "thumbnailPosition",
+    "uncompressedThumbnail",
+    "directory",
+    "customContentType",
+    "fields",
+    "imageFormat",
+    "content",
+    "type",
+    "listOrder",
+    "listOrderDir",
+    "truncate",
+    "fullExcerpt",
+)
+_CONTENT_LIST_ALWAYS = ("thumbnailPosition", "uncompressedThumbnail")
+_PROPS_ALREADY_SHOWN = frozenset(
+    {
+        "style",
+        "settings",
+        "class",
+        "widgetClass",
+        "identifier",
+        "classes",
+        "classNames",
+        "footer",
+        "footerLink",
+    }
+)
 
 
 def _flatten_style(d: Dict[str, Any]) -> Dict[str, Any]:
@@ -57,9 +156,171 @@ def _flatten_style(d: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _format_widget_entry(widget_id: str, w_type: str, raw: Dict[str, Any]) -> List[str]:
-    """Format a single widget from the layout's widgets[] for readable output."""
-    lines = [f"  • {w_type!r} (id: {widget_id})"]
+def _linked_directory_id(props: Dict[str, Any], settings: Any) -> Optional[str]:
+    """Directory widget's linked directory uid (e.g. 8821612211991448)."""
+    bags: List[Dict[str, Any]] = []
+    if isinstance(settings, dict):
+        bags.append(settings)
+    if isinstance(props, dict):
+        bags.append(props)
+    for bag in bags:
+        for key in ("directory", "directoryId", "directoryUid", "directory_id", "directoryUID"):
+            val = bag.get(key)
+            if isinstance(val, dict):
+                val = val.get("uid") or val.get("id") or val.get("directory")
+            if isinstance(val, list):
+                val = val[0] if val else None
+            if val is not None and str(val).strip():
+                return str(val).strip()
+    return None
+
+
+def _fmt_or_unset(value: Any) -> str:
+    if value is None:
+        return "unset"
+    if isinstance(value, str) and not value.strip():
+        return "unset"
+    return json.dumps(value)
+
+
+def _fields_honor_lines(w_type: str, props: Dict[str, Any], settings: Any) -> List[str]:
+    """content/save HAR: both settings.fields and properties.fields[] were stored. Front uses /blocks order."""
+    if normalize_widget_type(w_type) != "content-list":
+        return []
+    props = props if isinstance(props, dict) else {}
+    bag = settings if isinstance(settings, dict) else {}
+    settings_fields = bag.get("fields")
+    array_fields = props.get("fields")
+    if settings_fields is None and array_fields is None:
+        return []
+    return [
+        "      fields: content/save persisted both bags "
+        f"(settings.fields={json.dumps(settings_fields) if settings_fields is not None else 'absent'}; "
+        f"properties.fields[]={json.dumps(array_fields) if array_fields is not None else 'absent'}). "
+        "What the UI composed is inspect_widget_render /blocks items[].order — not these bags."
+    ]
+
+
+def _is_empty_style(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    if isinstance(value, dict):
+        return all(_is_empty_style(v) for v in value.values()) if value else True
+    if isinstance(value, list):
+        return all(_is_empty_style(v) for v in value) if value else True
+    return False
+
+
+def _sibling_property_lines(w_type: str, props: Dict[str, Any], settings: Any) -> List[str]:
+    """Dump BO sibling keys from content/save (not just properties.settings)."""
+    props = props if isinstance(props, dict) else {}
+    nt = normalize_widget_type(w_type)
+    lines: List[str] = []
+    shown: set = set()
+    keys = list(_SIBLING_KEYS)
+    if nt == "content-list":
+        for key in _CONTENT_LIST_ALWAYS:
+            if key not in keys:
+                keys.append(key)
+    for key in keys:
+        if key in _PROPS_ALREADY_SHOWN:
+            continue
+        if key in props:
+            lines.append(f"      properties.{key}: {json.dumps(props[key])}")
+            shown.add(key)
+        elif nt == "content-list" and key in _CONTENT_LIST_ALWAYS:
+            lines.append(f"      properties.{key}: unset")
+            shown.add(key)
+    return lines
+
+
+def _visual_lines(w_type: str, props: Dict[str, Any], settings: Any) -> List[str]:
+    """Footer only when the widget type can have it; unset means the field is absent."""
+    nt = normalize_widget_type(w_type)
+    footer = _extract_footer(props, settings)
+    if nt == "content-list" or "directory" in nt:
+        return [f"      footer link: {_fmt_or_unset(footer)}"]
+    return []
+
+
+def _extract_footer(props: Dict[str, Any], settings: Any) -> Optional[Dict[str, Any]]:
+    """Return footer {label, href} from template properties/settings when present."""
+    candidates: List[Any] = []
+    if isinstance(settings, dict):
+        candidates.append(settings.get("footer"))
+        candidates.append(settings.get("footerLink"))
+    candidates.append(props.get("footer"))
+    candidates.append(props.get("footerLink"))
+    for raw in candidates:
+        if not isinstance(raw, dict):
+            continue
+        label = raw.get("label") or raw.get("title") or raw.get("text") or raw.get("name")
+        href = raw.get("href") or raw.get("url") or raw.get("link")
+        if label is not None or href is not None:
+            return {"label": label, "href": href}
+    return None
+
+
+def _nonempty_id(value: Any) -> Optional[str]:
+    """Return a stripped ID string, or None. Never truncates."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _widget_identity_fields(node: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Collect full widgetId / uuid / id from a layout or template node."""
+    if not isinstance(node, dict):
+        return {}
+    layers = [node]
+    nested = node.get("widget")
+    if isinstance(nested, dict):
+        layers.append(nested)
+    out: Dict[str, str] = {}
+    for layer in layers:
+        widget_id = _nonempty_id(layer.get("widgetId"))
+        uuid = _nonempty_id(layer.get("uuid"))
+        extra = _nonempty_id(layer.get("id"))
+        if widget_id:
+            out["widgetId"] = widget_id
+        if uuid:
+            out["uuid"] = uuid
+        if extra and extra not in out.values():
+            out["id"] = extra
+    return out
+
+
+def _format_widget_identity_label(
+    widget_id: str,
+    template_widget: Optional[Dict[str, Any]] = None,
+    raw: Optional[Dict[str, Any]] = None,
+) -> str:
+    """One label: writable template uuid first; layoutId is mapped, not a second widget."""
+    write_id = writable_template_id(template_widget)
+    layout_ids = [i for i in widget_identity_ids(raw) if i != write_id]
+    if write_id:
+        parts = [f"use this id for writes: {write_id}"]
+        if layout_ids:
+            parts.append(f"layoutId: {layout_ids[0]} (also accepted via map)")
+        return ", ".join(parts)
+    fallback = layout_ids[0] if layout_ids else (_nonempty_id(widget_id) or "—")
+    return f"layout-only / readOnly id: {fallback} — not writable via update_widget_settings"
+
+
+def _format_widget_entry(
+    widget_id: str,
+    w_type: str,
+    raw: Dict[str, Any],
+    template_widget: Optional[Dict[str, Any]] = None,
+    parent: Optional[Dict[str, Any]] = None,
+    *,
+    verbose: bool = False,
+) -> List[str]:
+    """Format a widget from layout.widgets[] plus matched content.template node."""
+    lines = [f"  • {w_type!r} ({_format_widget_identity_label(widget_id, template_widget, raw)})"]
     body = raw.get("body") or {}
     style = raw.get("style") or {}
     if body.get("text") is not None:
@@ -73,34 +334,148 @@ def _format_widget_entry(widget_id: str, w_type: str, raw: Dict[str, Any]) -> Li
     flat_style = _flatten_style(style)
     if flat_style:
         lines.append(f"      style: {json.dumps(flat_style)}")
+
+    props: Dict[str, Any] = {}
+    if isinstance(template_widget, dict) and isinstance(template_widget.get("properties"), dict):
+        props = template_widget["properties"]
+    elif isinstance(raw.get("properties"), dict):
+        props = raw["properties"]
+
+    prop_style = props.get("style")
+    if prop_style is not None and (verbose or not _is_empty_style(prop_style)):
+        lines.append(f"      properties.style: {json.dumps(prop_style)}")
+
+    settings = props.get("settings")
+    if settings is not None:
+        lines.append(f"      properties.settings: {json.dumps(settings)}")
+    lines.extend(_sibling_property_lines(w_type, props, settings))
+
+    for key in _ADVANCED_CLASS_KEYS:
+        if props.get(key) is not None:
+            note = _ADVANCED_FIELD_NOTES.get(key, "")
+            suffix = f"  [{note}]" if note else ""
+            lines.append(f"      properties.{key}: {props.get(key)!r}{suffix}")
+            if key == "class" and isinstance(props.get("class"), str) and props["class"].strip():
+                token = props["class"].strip().split()[0]
+                lines.append(f"      {skin_bridge_line(token)}")
+
+    lines.extend(_fields_honor_lines(w_type, props, settings))
+    lines.extend(_visual_lines(w_type, props, settings))
+
+    w_type_norm = (w_type or "").strip().lower()
+    if "directory" in w_type_norm:
+        dir_id = _linked_directory_id(props, settings)
+        if dir_id:
+            lines.append(f"      linked directory id: {dir_id}")
+        else:
+            lines.append("      linked directory id: unset")
+
+    if parent:
+        bits = [
+            f"row={parent.get('row')}",
+            f"cell={parent.get('cell')}",
+            f"width={parent.get('width')}",
+        ]
+        if parent.get("rowId"):
+            bits.append(f"row uuid={parent['rowId']}")
+        if parent.get("cellId"):
+            bits.append(f"cell uuid={parent['cellId']}")
+        lines.append(f"      parent: {' '.join(bits)}")
     return lines
 
 
-def _format_layout_response(layout: Dict[str, Any]) -> str:
-    """Format layout API response for human/AI reading: components tree summary + widgets with styles."""
+def _parent_for_widget(
+    widget_id: str,
+    parents: Dict[str, Dict[str, Any]],
+    template_widget: Optional[Dict[str, Any]],
+    raw: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Prefer template parent (row/cell uuid live there on /bot content/save)."""
+    candidates: List[Dict[str, Any]] = []
+    for node in (template_widget, raw):
+        for tid in widget_identity_ids(node):
+            if tid in parents:
+                candidates.append(parents[tid])
+    if widget_id in parents:
+        candidates.append(parents[widget_id])
+    if not candidates:
+        return None
+    out = dict(candidates[0])
+    for rec in candidates[1:]:
+        for key in ("rowId", "cellId", "width", "row", "cell"):
+            if out.get(key) in (None, "") and rec.get(key) not in (None, ""):
+                out[key] = rec[key]
+    return out
+
+
+def _collect_page_widgets(
+    layout: Dict[str, Any],
+    content: Optional[Dict[str, Any]],
+) -> List[Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]]:
+    """One pair per logical widget (template uuid is the write id)."""
+    template = (content or {}).get("template") or {}
+    return pair_layout_and_template(layout, template)
+
+
+def _format_layout_response(
+    layout: Dict[str, Any],
+    content: Optional[Dict[str, Any]] = None,
+    *,
+    verbose: bool = False,
+) -> str:
+    """Format layout API + content.template for human/AI reading."""
     lines = [
         "=== Page layout (API) ===",
         f"Layout ID: {layout.get('id', '—')}",
         f"Revision: {layout.get('revisionNumber', '—')}",
         "",
     ]
-    widgets = layout.get("widgets") or []
-    if not widgets:
-        lines.append("No widgets in this layout.")
+    if content:
+        lines.insert(3, f"Content ID: {content.get('uid') or content.get('id') or '—'}")
+        lines.insert(4, f"Content type: {content.get('type') or content.get('customContentType') or '—'}")
+
+    template = (content or {}).get("template") or {}
+    layout_parents = index_widget_parents(layout.get("components") or [])
+    template_parents = index_widget_parents(template.get("components") or [])
+    parents = {**layout_parents, **template_parents}
+
+    page_widgets = _collect_page_widgets(layout, content)
+    if not page_widgets:
+        lines.append("No widgets in this layout or content.template.")
         return "\n".join(lines)
 
-    lines.append("--- Widgets (type, id, text, style) ---")
-    for item in widgets:
-        w = item.get("widget") or item
-        w_id = w.get("widgetId") or w.get("id") or "—"
-        w_type = w.get("widgetType") or w.get("body", {}).get("type") or "—"
-        lines.extend(_format_widget_entry(w_id, w_type, w))
+    lines.append(
+        "--- Widgets (one line per widget; use this id for writes = template uuid) ---"
+    )
+    lines.append(CSS_HOOKS_LEGEND)
+    for raw, template_widget in page_widgets:
+        node = template_widget or raw or {}
+        write_id = writable_template_id(template_widget)
+        ids = widget_identity_ids(template_widget) or widget_identity_ids(raw)
+        w_id = write_id or (ids[0] if ids else "—")
+        w_type = widget_type_of(node) or "—"
+        parent = _parent_for_widget(w_id, parents, template_widget, raw)
+        lines.extend(
+            _format_widget_entry(w_id, w_type, raw or {}, template_widget, parent, verbose=verbose)
+        )
         lines.append("")
 
-    components = layout.get("components") or []
-    if components:
-        lines.append("--- Structure (components tree) ---")
-        lines.append(_summary_components(components, indent=0))
+    layout_components = layout.get("components") or []
+    template_components = template.get("components") or []
+    if verbose:
+        if layout_components:
+            lines.append("--- Structure (layout.components, full IDs) ---")
+            lines.append(_summary_components(layout_components, indent=0))
+        if template_components:
+            lines.append("")
+            lines.append("--- Structure (content.template.components, full IDs) ---")
+            lines.append(_summary_components(template_components, indent=0))
+    elif template_components:
+        lines.append("--- Structure (content.template.components, full IDs) ---")
+        lines.append(_summary_components(template_components, indent=0))
+    elif layout_components:
+        lines.append("--- Structure (layout.components, full IDs) ---")
+        lines.append(_summary_components(layout_components, indent=0))
     return "\n".join(lines).strip()
 
 
@@ -111,9 +486,13 @@ def _summary_components(components: List[Dict], indent: int) -> str:
     for c in components:
         t = c.get("type") or "?"
         if t == "widget":
-            w_type = c.get("widgetType", "?")
-            w_id = (c.get("widgetId") or "")[:8]
-            out.append(f"{prefix}{t}({w_type}, id={w_id}...)")
+            inner = c.get("widget") if isinstance(c.get("widget"), dict) else {}
+            w_type = c.get("widgetType") or inner.get("widgetType") or "?"
+            ids = _widget_identity_fields(c)
+            id_bits = [f"{k}={v}" for k, v in ids.items()]
+            if not id_bits:
+                id_bits = ["widgetId=—"]
+            out.append(f"{prefix}{t}({w_type}, {', '.join(id_bits)})")
         elif t == "row":
             out.append(f"{prefix}row")
             for cell in c.get("cells") or []:
@@ -127,13 +506,128 @@ def _summary_components(components: List[Dict], indent: int) -> str:
     return "\n".join(out)
 
 
-def _format_style_response(style: Dict[str, Any]) -> str:
-    """Format style and stylesheets for text output."""
+def find_slideshow_paths(properties: Any, prefix: str = "properties") -> List[str]:
+    """Return dotted paths of slideshow-related keys in a properties object."""
+    found: List[str] = []
+
+    def walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                child = f"{path}.{k}"
+                kl = str(k).lower()
+                if "slideshow" in kl or k in (
+                    "height",
+                    "wrapperHeight",
+                    "wrapper",
+                    "contentPosition",
+                    "autoplay",
+                    "interval",
+                ):
+                    if "slideshow" in kl or "slideshow" in path.lower():
+                        found.append(child)
+                walk(v, child)
+        elif isinstance(node, list):
+            for i, item in enumerate(node):
+                walk(item, f"{path}[{i}]")
+
+    walk(properties, prefix)
+    return found
+
+
+def _format_theme_properties(props: Any) -> List[str]:
+    """Dump style.properties keys used for palette / header / slideshow / footer."""
+    lines = ["--- Theme properties (style.properties) ---"]
+    if not isinstance(props, dict):
+        lines.append(f"(properties is {type(props).__name__}, not an object)")
+        return lines
+
+    for key in ("primary", "secondary", "accent", "colors"):
+        if key in props:
+            lines.append(f"{key}: {json.dumps(props.get(key))}")
+    for key in ("top", "mainNav", "search", "footer"):
+        if key in props:
+            lines.append(f"{key}: {json.dumps(props.get(key))}")
+
+    slideshow_paths = find_slideshow_paths(props)
+    if "slideshow" in props:
+        lines.append(f"slideshow (style.properties.slideshow): {json.dumps(props.get('slideshow'))}")
+    elif slideshow_paths:
+        lines.append(f"slideshow-related paths: {', '.join(slideshow_paths)}")
+        for path in slideshow_paths:
+            parts = path.split(".")[1:]
+            node: Any = props
+            for p in parts:
+                if isinstance(node, dict):
+                    node = node.get(p)
+                else:
+                    node = None
+                    break
+            lines.append(f"  {path}: {json.dumps(node)}")
+    else:
+        lines.append(
+            "slideshow: not on style.properties (HAR style/save keys: "
+            "accent, colors, footer, mainNav, primary, search, secondary, top). "
+            "BO persist is header/save — see Header slideshow below."
+        )
+
+    extra = [k for k in props.keys() if k not in ("primary", "secondary", "accent", "colors", "top", "mainNav", "search", "footer", "slideshow")]
+    if extra:
+        extras = {k: props[k] for k in extra}
+        lines.append(f"other properties: {json.dumps(extras)}")
+    return lines
+
+
+def _format_header_slideshow(header: Optional[Dict[str, Any]]) -> List[str]:
+    """HAR header/save: height + properties.wrapperHeight / layoutPosition / interval."""
+    lines = ["--- Header slideshow (HAR POST header/save, not style.properties) ---"]
+    if not isinstance(header, dict):
+        lines.append("header: unset (no instance.defaultHeader / header/get)")
+        return lines
+    props = header.get("properties") if isinstance(header.get("properties"), dict) else {}
+    lines.append(f"header.id: {header.get('id') or header.get('uid') or '—'}")
+    lines.append(f"header.height: {json.dumps(header.get('height'))}")
+    lines.append(f"header.properties.wrapperHeight: {json.dumps(props.get('wrapperHeight'))}")
+    lines.append(f"header.properties.layoutPosition: {json.dumps(props.get('layoutPosition'))}")
+    lines.append(f"header.properties.interval: {json.dumps(props.get('interval'))}")
+    return lines
+
+
+def _format_style_response(
+    style: Dict[str, Any],
+    instance: Optional[Dict[str, Any]] = None,
+    *,
+    full: bool = False,
+    header: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Format style properties, instance head, and stylesheets."""
     lines = [
         "=== LumApps style (API) ===",
-        f"Style ID: {style.get('id') or style.get('styleId') or '—'}",
+        f"Style ID: {style.get('id') or style.get('styleId') or style.get('uid') or '—'}",
         "",
     ]
+    lines.extend(_format_theme_properties(style.get("properties")))
+    lines.append("")
+
+    if instance:
+        lines.append("--- Instance ---")
+        lines.append(f"slug: {instance.get('slug') or '—'}")
+        lines.append(f"name: {instance.get('name') or '—'}")
+        lines.append(f"style: {instance.get('style') or '—'}")
+        lines.append(f"head: {instance.get('head') if instance.get('head') is not None else '—'}")
+        inst_props = instance.get("properties")
+        if inst_props is not None:
+            lines.append(f"instance.properties: {json.dumps(inst_props)}")
+            inst_paths = find_slideshow_paths(inst_props, prefix="instance.properties")
+            if inst_paths:
+                lines.append(f"instance slideshow-related paths: {', '.join(inst_paths)}")
+            elif inst_props == {}:
+                lines.append("instance.properties is {} (HAR instance/save) — slideshow is not here.")
+        lines.append(f"instance.defaultHeader: {instance.get('defaultHeader') or '—'}")
+        lines.append("")
+
+    lines.extend(_format_header_slideshow(header))
+    lines.append("")
+
     sheets = style.get("stylesheets") or []
     if not sheets:
         lines.append("No stylesheets in this style.")
@@ -143,7 +637,7 @@ def _format_style_response(style: Dict[str, Any]) -> str:
         name = s.get("name") or "—"
         url = s.get("url") or ""
         content = (s.get("content") or "").strip()
-        if len(content) > MAX_CSS_EXCERPT:
+        if not full and len(content) > MAX_CSS_EXCERPT:
             content = content[:MAX_CSS_EXCERPT] + "\n... (truncated)"
         lines.append(f"--- Stylesheet {i + 1}: kind={kind}, name={name} ---")
         if url:
@@ -158,13 +652,15 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     content_id = arguments.get("content_id")
     site_id = arguments.get("site_id")
     user_email = arguments.get("user_email")
+    full = bool(arguments.get("full"))
+    verbose = bool(arguments.get("verbose"))
 
     if not user_email:
         return {
             "content": [
                 {
                     "type": "text",
-                    "text": "user_email is required. Provide content_id + user_email to inspect a page layout, or site_id + user_email to inspect the site global CSS.",
+                    "text": "user_email is required. Provide content_id + user_email to inspect a page layout, or site_id + user_email to inspect the site theme.",
                 }
             ]
         }
@@ -172,9 +668,14 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     if content_id:
         logger.info(f"Executing inspect_lumapps_element (layout) content_id={content_id!r}, user_email={user_email!r}")
         try:
-            token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
+            token = await lumapps_auth.get_inspect_token(user_email=user_email)
             layout = await lumapps_client.get_content_layout(content_id, token=token)
-            text = _format_layout_response(layout)
+            content: Optional[Dict[str, Any]] = None
+            try:
+                content = await lumapps_client.get_content(content_id, token=token)
+            except Exception as e:
+                logger.warning("inspect_lumapps_element get_content failed (layout-only fallback): %s", e)
+            text = _format_layout_response(layout, content, verbose=verbose)
             return {"content": [{"type": "text", "text": text}]}
         except Exception as e:
             logger.exception("inspect_lumapps_element layout API failed")
@@ -190,14 +691,28 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     if site_id:
         logger.info(f"Executing inspect_lumapps_element (style) site_id={site_id!r}, user_email={user_email!r}")
         try:
-            token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
+            token = await lumapps_auth.get_inspect_token(user_email=user_email)
             data = await lumapps_client.get_style_by_instance(site_id, token=token)
             style = data.get("style")
             if not style:
                 return {
                     "content": [{"type": "text", "text": f"No style found for site_id={site_id!r}. Check the site/instance ID."}]
                 }
-            text = _format_style_response(style)
+            instance: Optional[Dict[str, Any]] = None
+            header: Optional[Dict[str, Any]] = None
+            try:
+                instance = await lumapps_client.get_instance(site_id, token=token)
+            except Exception as e:
+                logger.warning("inspect_lumapps_element get_instance failed: %s", e)
+            header_id = None
+            if isinstance(instance, dict):
+                header_id = instance.get("defaultHeader") or instance.get("header")
+            if header_id:
+                try:
+                    header = await lumapps_client.get_header(str(header_id), token=token)
+                except Exception as e:
+                    logger.warning("inspect_lumapps_element get_header failed: %s", e)
+            text = _format_style_response(style, instance, full=full, header=header)
             return {"content": [{"type": "text", "text": text}]}
         except Exception as e:
             logger.exception("inspect_lumapps_element style API failed")
@@ -216,7 +731,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         "content": [
             {
                 "type": "text",
-                "text": "Provide content_id + user_email to inspect a page layout (widgets, padding, margin, titles), or site_id + user_email to inspect the site global CSS.",
+                "text": "Provide content_id + user_email to inspect a page layout (widgets, settings, Advanced classes), or site_id + user_email to inspect the site theme.",
             }
         ]
     }

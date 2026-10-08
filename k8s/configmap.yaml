@@ -24,6 +24,9 @@ data:
   # OIDC_CLOCK_SKEW_SECONDS: "60"
   # Optional: public URL for MCP clients (e.g. ingress); leave empty if not needed
   # MCP_PUBLIC_URL: ""
+  # Fail-closed: comma-separated emails allowed to impersonate LumApps (tools/call).
+  # Empty/unset denies all tool calls. Required when /mcp is public.
+  # MCP_ALLOWED_USER_EMAILS: "joffrey@your-domain.com"
   # Optional: extra CORS origins, comma-separated
   # CORS_ORIGINS: ""
   # Optional: user directory module id for find_person enrichment
