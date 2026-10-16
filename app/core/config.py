@@ -12,9 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import model_validator
 from typing import Optional, Literal
+
+_ENTRA_TENANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-]{0,127}$")
 
 AuthMode = Literal["oidc_preferred", "api_key_only"]
 
@@ -28,6 +32,11 @@ class Settings(BaseSettings):
     # Auth mode: oidc_preferred (validate Bearer as OIDC JWT, optional API key fallback) or api_key_only (legacy)
     AUTH_MODE: AuthMode = "oidc_preferred"
     AUTH_ALLOW_API_KEY_FALLBACK: bool = True
+
+    # Microsoft Entra tenant (directory) id or domain. Not a Chanel-specific value.
+    # When set and OIDC_ISSUER_URL is empty, the issuer is
+    # https://login.microsoftonline.com/{ENTRA_TENANT_ID}/v2.0
+    ENTRA_TENANT_ID: Optional[str] = None
 
     # OIDC (provider-agnostic): issuer and discovery
     OIDC_ISSUER_URL: Optional[str] = None
@@ -72,6 +81,35 @@ class Settings(BaseSettings):
     RBAC_CONTENT_SITE_CACHE_TTL_SECONDS: int = 300
     RBAC_CONTENT_SITE_CACHE_MAX_SIZE: int = 500
 
+    def effective_oidc_issuer(self) -> Optional[str]:
+        """Issuer used for discovery and token checks.
+
+        ``OIDC_ISSUER_URL`` wins when it is set. Otherwise an Entra v2 issuer
+        is derived from ``ENTRA_TENANT_ID``.
+        """
+        if self.OIDC_ISSUER_URL and self.OIDC_ISSUER_URL.strip():
+            return self.OIDC_ISSUER_URL.strip().rstrip("/")
+        tenant = (self.ENTRA_TENANT_ID or "").strip()
+        if tenant:
+            return f"https://login.microsoftonline.com/{tenant}/v2.0"
+        return None
+
+    @model_validator(mode="after")
+    def check_entra_tenant(self):
+        if self.ENTRA_TENANT_ID is None:
+            return self
+        tenant = self.ENTRA_TENANT_ID.strip()
+        if not tenant:
+            self.ENTRA_TENANT_ID = None
+            return self
+        if not _ENTRA_TENANT_RE.fullmatch(tenant):
+            raise ValueError(
+                "ENTRA_TENANT_ID must be an Entra tenant id or domain name, "
+                "without slashes or spaces"
+            )
+        self.ENTRA_TENANT_ID = tenant
+        return self
+
     @model_validator(mode="after")
     def check_lumapps_auth(self):
         if self.LUMAPPS_ACCESS_TOKEN:
@@ -92,13 +130,13 @@ class Settings(BaseSettings):
             if not self.MCP_API_KEY:
                 raise ValueError("AUTH_MODE=api_key_only requires MCP_API_KEY to be set")
             return self
-        # oidc_preferred: need OIDC issuer or API key fallback
-        if self.OIDC_ISSUER_URL:
+        # oidc_preferred: need an OIDC issuer (or Entra tenant) or API key fallback
+        if self.effective_oidc_issuer():
             return self
         if self.AUTH_ALLOW_API_KEY_FALLBACK and self.MCP_API_KEY:
             return self
         raise ValueError(
-            "AUTH_MODE=oidc_preferred requires either OIDC_ISSUER_URL to be set "
+            "AUTH_MODE=oidc_preferred requires OIDC_ISSUER_URL or ENTRA_TENANT_ID, "
             "or AUTH_ALLOW_API_KEY_FALLBACK=true with MCP_API_KEY set"
         )
 

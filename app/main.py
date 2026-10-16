@@ -14,7 +14,7 @@
 
 from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import sse, messages, streamable_http
+from app.routers import sse, messages, streamable_http, oauth_metadata
 from app.core.logging import setup_logging
 from app.core.security import AuthResult, validate_api_key_header_or_query
 from app import tools  # noqa: F401
@@ -40,6 +40,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(oauth_metadata.router)
 app.include_router(streamable_http.router)
 app.include_router(sse.router)
 app.include_router(messages.router)

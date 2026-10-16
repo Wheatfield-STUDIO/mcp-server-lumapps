@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Copilot Studio OAuth discovery for Microsoft Entra ID.** With `ENTRA_TENANT_ID` (or an Entra `OIDC_ISSUER_URL`) and `AUTH_MODE=oidc_preferred`, the server publishes RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp`, and RFC 8414 authorization-server metadata at `/.well-known/oauth-authorization-server`. Authorize, token, and refresh URLs point at `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/...`. Unauthenticated MCP calls advertise that metadata in `WWW-Authenticate`. There is no dynamic client registration endpoint.
+- **Entra access-token validation.** Bearer tokens are still checked with the OIDC path (signature, issuer, audience, expiry). v1 (`https://sts.windows.net/{tenant}/`) and v2 issuers are both accepted for the configured tenant. `aud` may be the Application ID URI (`api://{app-id}`) or the app id GUID. `user_email` is taken from `email`, `upn`, `preferred_username`, or `unique_name`.
+
+### Security
+
+- **Query-string API keys are rejected.** `apiKey` and `token` on the query string return 401, including when a valid `X-API-Key` header is also present. The `X-API-Key` header remains the API-key fallback. RBAC defaults are unchanged.
+
 ## [1.1.0] - 2026-03-01
 
 ### Added

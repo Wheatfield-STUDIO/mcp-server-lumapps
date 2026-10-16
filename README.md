@@ -207,7 +207,7 @@ Content is stored in `app/resources/` and can be updated without code changes.
 
 - **MCP authentication**: dual mode.
   - **OIDC preferred** (default): send `Authorization: Bearer <user-id-token>` from your IdP (Azure AD, Okta, Ping, etc.). The server validates the JWT (signature, issuer, audience, expiry) and binds every tool call to the verified user; `user_email` is taken from token claims and must not be overridden by the client.
-  - **API key fallback**: when `AUTH_ALLOW_API_KEY_FALLBACK=true`, you can still use `X-API-Key`, `Authorization: Bearer <static-key>`, or query `apiKey` / `token` with `MCP_API_KEY`. For production SSO-only, set `AUTH_ALLOW_API_KEY_FALLBACK=false`. When [user-level RBAC](#user-level-rbac) is enabled, API key alone is **read-only**: Content and Structural tools are denied and require OIDC identity.
+  - **API key fallback**: when `AUTH_ALLOW_API_KEY_FALLBACK=true`, you can still use the `X-API-Key` header or `Authorization: Bearer <static-key>` with `MCP_API_KEY`. Query parameters `apiKey` and `token` are rejected. For production SSO-only, set `AUTH_ALLOW_API_KEY_FALLBACK=false`. When [user-level RBAC](#user-level-rbac) is enabled, API key alone is **read-only**: Content and Structural tools are denied and require OIDC identity.
 - **Root endpoint**: `GET /` is unauthenticated (info only). `POST /` accepts JSON-RPC only when authenticated (same as `/mcp`).
 - **Secrets**: no hardcoded secrets; everything comes from config (`pydantic-settings` + `.env`).
 - **`.env`**: for local development only; must not be versioned. In production use environment variables or a secrets store.
@@ -251,6 +251,19 @@ To use corporate SSO and tie every action to a verified human identity:
 5. Have the MCP client (Copilot Studio, Cursor, etc.) obtain an identity token for the current user and send it as `Authorization: Bearer <token>` on each request.
 
 The server then uses the token’s claims to resolve `user_email` for LumApps; client-supplied `user_email` in tool arguments is ignored or rejected when it does not match the token. This meets GDPR/SOC2-style requirements for user identification and revocation.
+
+### Copilot Studio with Microsoft Entra ID
+
+Set `ENTRA_TENANT_ID` (and `OIDC_AUDIENCE`, `OIDC_SCOPES`) with `AUTH_MODE=oidc_preferred`. The process publishes:
+
+- `GET /.well-known/oauth-protected-resource` and `GET /.well-known/oauth-protected-resource/mcp`
+- `GET /.well-known/oauth-authorization-server`
+
+`authorization_servers` is the Entra v2 issuer. The authorization and token URLs are `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize` and `.../token`. Refresh uses that same token URL. There is no registration endpoint: Entra does not implement dynamic client registration.
+
+In Copilot Studio’s MCP wizard, **Manual** is the mode that attaches. Use the Entra app’s client id and secret, the authorize and token URLs above, the token URL again as the refresh URL, and `OIDC_SCOPES` (for example `api://{api-app-id}/access_as_user`). **Dynamic discovery** and **Dynamic** cannot finish, because both require the client to register itself and Entra has no registration endpoint.
+
+A valid access token’s `user_email` comes from token claims (`email`, then `upn`, `preferred_username`, or `unique_name`). v2 tokens (`iss` `https://login.microsoftonline.com/{tenant}/v2.0`) and v1 tokens (`iss` `https://sts.windows.net/{tenant}/`) are accepted for that tenant. `aud` may be `api://{app-id}` or the app id GUID. RBAC stays enabled.
 
 ---
 

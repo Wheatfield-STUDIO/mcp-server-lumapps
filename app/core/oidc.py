@@ -24,6 +24,12 @@ import jwt
 from jwt import PyJWKClient, PyJWKClientError
 
 from app.core.config import settings
+from app.core.oauth_metadata import (
+    audience_values,
+    entra_configured,
+    issuer_matches,
+    tenant_claim_matches,
+)
 from app.core.user_context import UserContext
 
 logger = logging.getLogger(__name__)
@@ -38,9 +44,9 @@ _jwks_lock = threading.Lock()
 def _discovery_url() -> Optional[str]:
     if settings.OIDC_DISCOVERY_URL:
         return settings.OIDC_DISCOVERY_URL.strip().rstrip("/")
-    if settings.OIDC_ISSUER_URL:
-        base = settings.OIDC_ISSUER_URL.strip().rstrip("/")
-        return f"{base}/.well-known/openid-configuration"
+    issuer = settings.effective_oidc_issuer()
+    if issuer:
+        return f"{issuer}/.well-known/openid-configuration"
     return None
 
 
@@ -72,12 +78,7 @@ def _get_jwks_client(jwks_uri: str) -> PyJWKClient:
 
 
 def _build_audience_options() -> Optional[List[str]]:
-    opts = []
-    if settings.OIDC_AUDIENCE:
-        opts.append(settings.OIDC_AUDIENCE)
-    if settings.OIDC_CLIENT_ID and settings.OIDC_CLIENT_ID not in (opts or []):
-        opts.append(settings.OIDC_CLIENT_ID)
-    return opts if opts else None
+    return audience_values()
 
 
 def _claims_to_user_context(claims: Dict[str, Any], issuer: str) -> UserContext:
@@ -87,7 +88,7 @@ def _claims_to_user_context(claims: Dict[str, Any], issuer: str) -> UserContext:
     email = claims.get(email_claim)
     if isinstance(email, list):
         email = email[0] if email else None
-    upn = claims.get("upn") or claims.get(username_claim)
+    upn = claims.get("upn") or claims.get(username_claim) or claims.get("unique_name")
     if isinstance(upn, list):
         upn = upn[0] if upn else None
     aud = claims.get("aud")
@@ -95,10 +96,18 @@ def _claims_to_user_context(claims: Dict[str, Any], issuer: str) -> UserContext:
         audience = aud[0] if aud else None
     else:
         audience = aud
-    scopes = []
-    scope_str = claims.get("scope")
-    if isinstance(scope_str, str):
-        scopes = [s.strip() for s in scope_str.split() if s.strip()]
+    scopes: List[str] = []
+    for scope_key in ("scope", "scp"):
+        scope_value = claims.get(scope_key)
+        if isinstance(scope_value, str):
+            scopes.extend(part.strip() for part in scope_value.split() if part.strip())
+        elif isinstance(scope_value, list):
+            scopes.extend(str(part).strip() for part in scope_value if str(part).strip())
+    deduped: List[str] = []
+    for scope in scopes:
+        if scope not in deduped:
+            deduped.append(scope)
+    scopes = deduped
     return UserContext(
         sub=sub,
         email=email,
@@ -115,18 +124,15 @@ async def validate_oidc_token(token: str) -> Optional[UserContext]:
     Validate Bearer token as OIDC JWT: signature (JWKS), issuer, audience, expiry.
     Returns UserContext if valid, None otherwise.
     """
-    if not settings.OIDC_ISSUER_URL:
+    issuer = settings.effective_oidc_issuer()
+    if not issuer:
         return None
-    discovery = await _fetch_discovery()
-    if not discovery:
-        logger.debug("No OIDC discovery available")
-        return None
-    jwks_uri = discovery.get("jwks_uri")
-    if not jwks_uri:
-        logger.warning("Discovery document has no jwks_uri")
-        return None
-    issuer = (settings.OIDC_ISSUER_URL or "").strip().rstrip("/")
     audience = _build_audience_options()
+    if entra_configured() and not audience:
+        logger.warning(
+            "OIDC token rejected: set OIDC_AUDIENCE to the Entra API application ID URI or app id"
+        )
+        return None
     try:
         unverified = jwt.decode(
             token,
@@ -137,8 +143,19 @@ async def validate_oidc_token(token: str) -> Optional[UserContext]:
         logger.debug("JWT decode (unverified) failed: %s", e)
         return None
     token_issuer = (unverified.get("iss") or "").strip().rstrip("/")
-    if token_issuer != issuer:
-        logger.debug("Issuer mismatch: token=%s config=%s", token_issuer, issuer)
+    if not issuer_matches(token_issuer):
+        logger.warning("OIDC token rejected: issuer %s is not allowed", token_issuer or "<empty>")
+        return None
+    if not tenant_claim_matches(unverified):
+        logger.warning("OIDC token rejected: tid claim does not match ENTRA_TENANT_ID")
+        return None
+    discovery = await _fetch_discovery()
+    if not discovery:
+        logger.debug("No OIDC discovery available")
+        return None
+    jwks_uri = discovery.get("jwks_uri")
+    if not jwks_uri:
+        logger.warning("Discovery document has no jwks_uri")
         return None
     jwks_client = _get_jwks_client(jwks_uri)
 
@@ -148,24 +165,38 @@ async def validate_oidc_token(token: str) -> Optional[UserContext]:
         except PyJWKClientError:
             return None
         try:
+            # Issuer is checked against the Entra v1 and v2 forms after the
+            # signature check. PyJWT accepts a single issuer string.
             return jwt.decode(
                 token,
                 signing_key.key,
                 algorithms=["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"],
-                issuer=issuer,
                 audience=audience,
                 options={
                     "verify_aud": bool(audience),
-                    "verify_iss": True,
+                    "verify_iss": False,
                     "verify_exp": True,
                     "verify_iat": True,
                 },
                 leeway=settings.OIDC_CLOCK_SKEW_SECONDS,
             )
-        except (jwt.ExpiredSignatureError, jwt.InvalidAudienceError, jwt.InvalidIssuerError, jwt.PyJWTError):
+        except jwt.ExpiredSignatureError:
+            logger.warning("OIDC token rejected: expired")
+            return None
+        except jwt.InvalidAudienceError:
+            logger.warning("OIDC token rejected: audience does not match the configured API audience")
+            return None
+        except jwt.PyJWTError:
             return None
 
     claims = await asyncio.to_thread(_verify_and_decode)
     if not claims:
         return None
-    return _claims_to_user_context(claims, issuer)
+    verified_issuer = (claims.get("iss") or "").strip().rstrip("/")
+    if not issuer_matches(verified_issuer):
+        logger.warning("OIDC token rejected: issuer %s is not allowed", verified_issuer or "<empty>")
+        return None
+    if not tenant_claim_matches(claims):
+        logger.warning("OIDC token rejected: tid claim does not match ENTRA_TENANT_ID")
+        return None
+    return _claims_to_user_context(claims, verified_issuer or issuer)
