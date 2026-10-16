@@ -20,11 +20,17 @@ from typing import Any, Dict, List, Tuple
 
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
-from app.tools.api_error_utils import is_permission_denied, PERMISSION_DENIED_MESSAGE
+from app.tools.api_error_utils import (
+    format_api_error,
+    is_permission_denied,
+    log_tool_failure,
+    PERMISSION_DENIED_MESSAGE,
+)
 
 logger = logging.getLogger(__name__)
 
 TOOL_NAME = "update_widget_style"
+TOOL_SENSITIVITY = "content"
 
 TOOL_SCHEMA = {
     "name": TOOL_NAME,
@@ -157,15 +163,15 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
         layout = await lumapps_client.get_content_layout(content_id, token=token)
     except Exception as e:
-        logger.exception("get_content_layout failed")
-        text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Failed to load layout: {e}"
+        log_tool_failure(logger, "get_content_layout failed", e)
+        text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Failed to load layout: {format_api_error(e)}"
         return {"content": [{"type": "text", "text": text}]}
 
     try:
         ok, msg = await _save_via_content(content_id, widget_id, style_updates, token, layout)
     except Exception as e:
-        logger.exception("save via content failed")
-        text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Save failed: {e}"
+        log_tool_failure(logger, "save via content failed", e)
+        text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Save failed: {format_api_error(e)}"
         return {"content": [{"type": "text", "text": text}]}
 
     if not ok:

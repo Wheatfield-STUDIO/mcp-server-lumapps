@@ -18,13 +18,14 @@ import json
 import logging
 from typing import Any, Dict, List
 
-from app.tools.api_error_utils import format_api_error
+from app.tools.api_error_utils import format_api_error, log_tool_failure
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
 
 logger = logging.getLogger(__name__)
 
 TOOL_NAME = "inspect_lumapps_element"
+TOOL_SENSITIVITY = "content"
 
 TOOL_SCHEMA = {
     "name": TOOL_NAME,
@@ -170,14 +171,14 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     if content_id:
-        logger.info(f"Executing inspect_lumapps_element (layout) content_id={content_id!r}, user_email={user_email!r}")
+        logger.info("Executing inspect_lumapps_element layout")
         try:
             token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
             layout = await lumapps_client.get_content_layout(content_id, token=token)
             text = _format_layout_response(layout)
             return {"content": [{"type": "text", "text": text}]}
         except Exception as e:
-            logger.exception("inspect_lumapps_element layout API failed")
+            log_tool_failure(logger, "inspect_lumapps_element layout API failed", e)
             return {
                 "content": [
                     {
@@ -188,7 +189,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
             }
 
     if site_id:
-        logger.info(f"Executing inspect_lumapps_element (style) site_id={site_id!r}, user_email={user_email!r}")
+        logger.info("Executing inspect_lumapps_element style")
         try:
             token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
             data = await lumapps_client.get_style_by_instance(site_id, token=token)
@@ -200,7 +201,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
             text = _format_style_response(style)
             return {"content": [{"type": "text", "text": text}]}
         except Exception as e:
-            logger.exception("inspect_lumapps_element style API failed")
+            log_tool_failure(logger, "inspect_lumapps_element style API failed", e)
             detail = format_api_error(e)
             hint = " If 400 Bad Request, the style API may not support this instance on this cell; you can still use update_global_css with this site_id to apply CSS."
             return {

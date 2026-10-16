@@ -15,7 +15,6 @@
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 from app.core.config import settings
-from app.services.lumapps_auth import lumapps_auth
 import logging
 from typing import Any, Dict, List
 
@@ -50,23 +49,20 @@ class LumAppsClient:
         
         async with httpx.AsyncClient(timeout=timeout) as client:
             url = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
-            logger.info(f"Sending {method} to {url}")
+            logger.info("LumApps %s %s", method, path)
             
             response = await client.request(method, url, headers=headers, **kwargs)
             
             if response.status_code == 429:
-                logger.warning(f"Rate limited by LumApps API: {url}")
+                logger.warning("LumApps rate limited %s", path)
                 response.raise_for_status()
             
             if response.status_code != 200:
-                request_url = str(response.request.url)
-                body_preview = (response.text or "")[:2000]
                 logger.error(
-                    "LumApps API error: %s %s | request=%s | response_body=%s",
+                    "LumApps API error: %s %s %s",
                     response.status_code,
                     response.reason_phrase,
-                    request_url,
-                    body_preview,
+                    path,
                 )
             
             response.raise_for_status()
@@ -81,12 +77,9 @@ class LumAppsClient:
         if lang:
             payload["lang"] = lang
         extra_headers = {"X-Lumapps-Searchengine": "ns"}
-        logger.info(f"Searching LumApps at {path} with payload: {payload}")
         data = await self._request("POST", path, token=token, json=payload, headers=extra_headers)
-        logger.info(f"LumApps Search Result Count: {data.get('resultCountExact')}")
-        
         items = data.get("items", [])
-        logger.info(f"LumApps API returned {len(items)} items.")
+        logger.info("LumApps search returned %s items", len(items))
         return items
 
     async def get_front_init_user(self, token: str) -> Dict[str, Any]:
@@ -102,7 +95,7 @@ class LumAppsClient:
             data = await self._request("GET", path, token=token, params=params)
             return data.get("user") or {}
         except httpx.HTTPStatusError as e:
-            logger.warning("front-init user failed: %s %s", e.response.status_code, e.response.text[:200] if e.response.text else "")
+            logger.warning("front-init user failed: %s", e.response.status_code)
             raise
 
     async def get_content_can_edit(self, content_id: str, token: str) -> bool:
@@ -158,96 +151,6 @@ class LumAppsClient:
         data = await self._request("GET", path, token=token, params=params)
         return data.get("items", [])
 
-    async def list_content(
-        self,
-        site_uid: str,
-        token: str,
-        limit: int = 5,
-        lang: str = None,
-        order_by: str = "publicationDate",
-        order_direction: str = "desc",
-    ) -> List[Dict[str, Any]]:
-        """
-        List content (e.g. news) for a site, sorted by publication date.
-        Used for listing site content (e.g. by publication date).
-        """
-        path = "_ah/api/lumsites/v1/content/list"
-        params = {
-            "siteId": site_uid,
-            "maxResults": limit,
-        }
-        if lang:
-            params["lang"] = lang
-        if order_by:
-            params["orderBy"] = order_by
-        if order_direction:
-            params["orderDirection"] = order_direction
-
-        data = await self._request("GET", path, token=token, params=params)
-        return data.get("items", [])
-
-    async def get_user_profile(
-        self,
-        user_email: str,
-        content_id: str,
-        token: str,
-        uid: str = None,
-        lang: str = "en",
-    ) -> Dict[str, Any]:
-        """
-        Get full user profile from the user directory (includes customProfile, jobDescription if present).
-        GET _ah/api/lumsites/v1/user/directory/get — use email or uid, and contentId.
-        """
-        path = "_ah/api/lumsites/v1/user/directory/get"
-        params = {"contentId": content_id}
-        if uid:
-            params["uid"] = uid
-        else:
-            params["email"] = user_email
-        if lang:
-            params["lang"] = lang
-        return await self._request("GET", path, token=token, params=params)
-
-    async def user_directory_list(
-        self,
-        content_id: str,
-        token: str,
-        query: str = None,
-        max_results: int = 30,
-        cursor: str = None,
-        first_name: str = None,
-        last_name: str = None,
-        primary_email: str = None,
-        status: str = "enabled",
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        """
-        Search user directory for profiles matching criteria. Returns full profile info
-        (jobDescription, customProfile, etc.) in one call.
-        POST _ah/api/lumsites/v1/user/directory/list
-        Body: contentId (required), query, maxResults (1–100), cursor, firstName, lastName, primaryEmail, status, etc.
-        """
-        path = "_ah/api/lumsites/v1/user/directory/list"
-        payload = {
-            "contentId": content_id,
-            "maxResults": min(max(1, max_results), 100),
-            "status": status,
-        }
-        if query:
-            payload["query"] = query
-        if cursor:
-            payload["cursor"] = cursor
-        if first_name:
-            payload["firstName"] = first_name
-        if last_name:
-            payload["lastName"] = last_name
-        if primary_email:
-            payload["primaryEmail"] = primary_email
-        for k, v in kwargs.items():
-            if v is not None and k not in payload:
-                payload[k] = v
-        return await self._request("POST", path, token=token, json=payload)
-
     async def get_platform_user_directory(self, token: str) -> Dict[str, Any]:
         """
         Get the main platform user directory content. Returns directory id (uid), instance (siteId),
@@ -284,25 +187,6 @@ class LumAppsClient:
                     params[f"searchCriteria[{field_uuid}]"] = str(value).strip()
         return await self._request("GET", path, token=token, params=params or None)
 
-    async def post_to_feed(
-        self,
-        feed_uid: str,
-        message: str,
-        token: str,
-        lang: str = None,
-    ) -> Dict[str, Any]:
-        """
-        Post a short update/message to a LumApps space (feed/community).
-        """
-        path = "_ah/api/lumsites/v1/feed/post"
-        payload = {
-            "feedUid": feed_uid,
-            "body": message,
-        }
-        if lang:
-            payload["lang"] = lang
-        return await self._request("POST", path, token=token, json=payload)
-
     async def get_content_layout(self, content_id: str, token: str) -> Dict[str, Any]:
         """
         Get the layout of a page (content): components tree and widgets with their styles (padding, margin, border, title text).
@@ -310,32 +194,6 @@ class LumAppsClient:
         """
         path = f"v2/organizations/{self.org_id}/contents/{content_id}/layout"
         return await self._request("GET", path, token=token)
-
-    async def get_widget_blocks(
-        self,
-        widget_type: str,
-        site_id: str,
-        token: str,
-        can_use_lang_fallback: bool = False,
-        force_display: bool = True,
-        body: Dict[str, Any] = None,
-    ) -> Dict[str, Any]:
-        """
-        Load the block/settings for a widget type on a site.
-        POST v2/organizations/{org_id}/widgets/{widget_type}/blocks?siteId=...&canUseLangFallback=...&forceDisplay=...
-        Used to get current widget config (body.style, text, etc.) before or after editing.
-        """
-        path = f"v2/organizations/{self.org_id}/widgets/{widget_type}/blocks"
-        params = {"siteId": site_id, "forceDisplay": str(force_display).lower()}
-        if widget_type == "title":
-            params["canUseLangFallback"] = str(can_use_lang_fallback).lower()
-        return await self._request(
-            "POST",
-            path,
-            token=token,
-            params=params,
-            json=body or {},
-        )
 
     async def save_content(self, token: str, data: Dict[str, Any], send_notifications: bool = True) -> Dict[str, Any]:
         """
@@ -349,24 +207,6 @@ class LumAppsClient:
         if not send_notifications:
             params["sendNotifications"] = "false"
         return await self._request("POST", path, token=token, params=params or None, json=data)
-
-    async def save_content_layout(self, content_id: str, token: str, layout: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Save (update) the layout of a page (v2 format: components + widgets[]).
-        Tries POST (PUT returns 404 on this LumApps API).
-        path: v2/organizations/{org_id}/contents/{content_id}/layout
-        """
-        path = f"v2/organizations/{self.org_id}/contents/{content_id}/layout"
-        try:
-            return await self._request("POST", path, token=token, json=layout)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                raise httpx.HTTPStatusError(
-                    "Layout save failed (404). This API may require saving via content/save with full content.template.",
-                    request=e.request,
-                    response=e.response,
-                ) from e
-            raise
 
     async def instance_search(
         self,
@@ -507,8 +347,9 @@ class LumAppsClient:
                     return style_id
                 except Exception as link_err:
                     logger.warning(
-                        "Linking style %s to instance %s failed (%s); retrying with refetched instance.",
-                        style_id, instance_id, link_err,
+                        "Linking style %s to instance %s failed; retrying with refetched instance.",
+                        style_id,
+                        instance_id,
                     )
                     try:
                         instance_fresh = await self.get_instance(instance_id, token=token)
@@ -519,10 +360,10 @@ class LumAppsClient:
                         logger.info("Linked style %s to instance %s (after refetch).", style_id, instance_id)
                         return style_id
                     except Exception as retry_err:
-                        logger.warning("Retry link failed: %s", retry_err)
+                        logger.warning("Retry link failed for instance %s", instance_id)
                         raise
         except Exception as e:
-            logger.warning("create style for instance %s failed: %s", instance_id, e)
+            logger.warning("create style for instance %s failed", instance_id)
         return None
 
     async def get_style_by_instance(self, instance_id: str, token: str) -> Dict[str, Any]:

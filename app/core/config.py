@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     AUTH_MODE: AuthMode = "oidc_preferred"
     AUTH_ALLOW_API_KEY_FALLBACK: bool = True
 
-    # Microsoft Entra tenant (directory) id or domain. Not a Chanel-specific value.
+    # Microsoft Entra tenant (directory) id or domain. No tenant is hardcoded.
     # When set and OIDC_ISSUER_URL is empty, the issuer is
     # https://login.microsoftonline.com/{ENTRA_TENANT_ID}/v2.0
     ENTRA_TENANT_ID: Optional[str] = None
@@ -65,6 +65,12 @@ class Settings(BaseSettings):
 
     LOG_LEVEL: str = "INFO"
     MAX_SEARCH_RESULTS: int = 5
+
+    # Public HTTP limits. 0 disables that control. Optional; Railway does not need to set them.
+    MCP_MAX_BODY_BYTES: int = 2_000_000
+    MCP_RATE_LIMIT_PER_MINUTE: int = 600
+    # FastAPI /docs, /redoc, and /openapi.json. Off unless explicitly enabled.
+    EXPOSE_API_DOCS: bool = False
 
     # RBAC: user-level role checks
     RBAC_ENABLED: bool = True

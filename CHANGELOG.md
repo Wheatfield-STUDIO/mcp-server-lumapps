@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **Query-string API keys are rejected.** `apiKey` and `token` on the query string return 401, including when a valid `X-API-Key` header is also present. The `X-API-Key` header remains the API-key fallback. RBAC defaults are unchanged.
+- **An API key cannot call tools.** `tools/call` requires an OIDC user. The client-supplied `user_email` is not forwarded to LumApps. `initialize` and `tools/list` still accept `X-API-Key` when `AUTH_ALLOW_API_KEY_FALLBACK` is true.
+- **Errors and logs no longer include LumApps response bodies, queries, or emails.** Unexpected failures return a generic message. `ValueError` messages (validation and RBAC) are still returned.
+- **Request limits.** `MCP_MAX_BODY_BYTES` (default 2 MB) and `MCP_RATE_LIMIT_PER_MINUTE` (default 600, keyed by a hash of the credential). `/docs` is off unless `EXPOSE_API_DOCS=true`.
+- **Removed the legacy SSE transport** (`/sse`, `/messages`) and **`POST /`**. Copilot Studio uses `/mcp` only.
+- **Removed `k8s/`.** Those ClusterIP manifests are not the Azure Container Apps path.
+- **Dependencies are pinned.** `pytest` is in `requirements-dev.txt` and is not installed in the image. `python-slugify` was unused and is gone.
+
+### Changed
+
+- `initialize` reports server version `1.1.0` and only the tools and resources capabilities that exist.
+- Startup logs a warning when `LUMAPPS_ACCESS_TOKEN` is set, without printing the token. Leave that variable unset so each call uses the signed-in user.
 
 ## [1.1.0] - 2026-03-01
 

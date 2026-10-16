@@ -107,6 +107,7 @@ def test_discovery_json(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> 
     assert protected.status_code == 200
     assert protected_mcp.status_code == 200
     assert server.status_code == 200
+    assert protected.headers["cache-control"] == "public, max-age=300"
 
     resource = protected.json()
     assert resource == protected_mcp.json()

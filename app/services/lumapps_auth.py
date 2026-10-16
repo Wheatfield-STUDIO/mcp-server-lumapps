@@ -42,7 +42,7 @@ class LumAppsAuthManager:
         - profile "admin": uses LUMAPPS_ADMIN_CLIENT_ID/SECRET (all.admin) or LUMAPPS_ACCESS_TOKEN.
         """
         if settings.LUMAPPS_ACCESS_TOKEN:
-            logger.debug("Using provided LUMAPPS_ACCESS_TOKEN")
+            logger.debug("Using LUMAPPS_ACCESS_TOKEN override")
             return settings.LUMAPPS_ACCESS_TOKEN
 
         if profile == "admin" and not settings.has_admin_credentials():
@@ -71,7 +71,7 @@ class LumAppsAuthManager:
                 f"LumApps {profile} credentials are required: set LUMAPPS_ADMIN_CLIENT_ID and LUMAPPS_ADMIN_CLIENT_SECRET for admin tools."
             )
 
-        logger.info(f"Refreshing LumApps OAuth2 token for {user_email} (profile={profile})")
+        logger.info("Refreshing LumApps OAuth2 token (profile=%s)", profile)
         async with httpx.AsyncClient() as client:
             try:
                 token_url = f"{settings.LUMAPPS_HAUSSMANN_CELL.rstrip('/')}/v2/organizations/{settings.LUMAPPS_ORG_ID}/application-token"
@@ -85,7 +85,7 @@ class LumAppsAuthManager:
                 response = await client.post(token_url, headers=headers, data=payload, timeout=10.0)
 
                 if response.status_code != 200:
-                    logger.error(f"Token error for {user_email} ({profile}): {response.status_code} - {response.text}")
+                    logger.error("LumApps token error (%s): HTTP %s", profile, response.status_code)
                 response.raise_for_status()
                 data = response.json()
                 token = data["access_token"]
@@ -93,10 +93,21 @@ class LumAppsAuthManager:
                 expires_at = time.time() + expires_in
                 key = self._cache_key(user_email, profile)
                 self._tokens[key] = {"token": token, "expires_at": expires_at}
-                logger.info(f"Token refreshed for {user_email} ({profile}), expires in {expires_in}s")
+                logger.info("LumApps token refreshed (profile=%s)", profile)
                 return token
-            except Exception as e:
-                logger.error(f"Failed to refresh LumApps token for {user_email} ({profile}): {e}")
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "Failed to refresh LumApps token (profile=%s, HTTP %s)",
+                    profile,
+                    exc.response.status_code,
+                )
+                raise
+            except Exception as exc:
+                logger.error(
+                    "Failed to refresh LumApps token (profile=%s, %s)",
+                    profile,
+                    type(exc).__name__,
+                )
                 raise
 
 

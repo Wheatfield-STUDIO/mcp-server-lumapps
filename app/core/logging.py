@@ -14,7 +14,7 @@
 
 import logging
 import sys
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 from app.core.config import settings
 
 def setup_logging():
@@ -23,7 +23,7 @@ def setup_logging():
     logger.setLevel(log_level)
 
     logHandler = logging.StreamHandler(sys.stdout)
-    formatter = jsonlogger.JsonFormatter(
+    formatter = JsonFormatter(
         '%(timestamp)s %(levelname)s %(name)s %(message)s',
         timestamp=True
     )

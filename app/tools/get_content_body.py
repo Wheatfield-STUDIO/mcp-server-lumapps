@@ -25,6 +25,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 TOOL_NAME = "get_content_body"
+TOOL_SENSITIVITY = "read"
 
 TOOL_SCHEMA = {
     "name": TOOL_NAME,
@@ -53,7 +54,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     if not user_email:
         raise ValueError("Missing 'user_email' argument")
 
-    logger.info(f"Executing get_content_body for {user_email}, content_id={content_id}")
+    logger.info("Executing get_content_body")
     token = await lumapps_auth.get_token(user_email=user_email)
     content_data = await lumapps_client.get_content(content_id, token=token, lang=language)
     parsed_list = html_parser.parse(content_data, lang=language, include_excerpt=False)
@@ -80,8 +81,8 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
                     m_name = m_name_obj.get(language) or m_name_obj.get("en") or next(iter(m_name_obj.values()), None)
                     if m_name:
                         metadata_names.append(m_name)
-        except Exception as e:
-            logger.warning(f"Failed to fetch metadata: {e}")
+        except Exception:
+            logger.warning("Failed to fetch metadata")
 
     base_url = settings.SITE_BASE_URL.rstrip("/")
     source_url = content_data.get("url") or f"{base_url}/content/{content_id}"

@@ -36,17 +36,27 @@ def is_permission_denied(exc: BaseException) -> bool:
     return False
 
 
-def format_api_error(exc: BaseException, max_body: int = 600) -> str:
-    """Extract a clear message from API errors (HTTPStatusError or RetryError wrapping it)."""
+def log_tool_failure(log, message: str, exc: BaseException) -> None:
+    """Log a tool failure without the LumApps response body or the exception text."""
     cause = exc
     if isinstance(exc, RetryError) and getattr(exc, "last_attempt", None):
         attempt = exc.last_attempt
         if getattr(attempt, "failed", False) and getattr(attempt, "outcome", None):
             cause = attempt.outcome.exception() or exc
     if isinstance(cause, httpx.HTTPStatusError):
-        r = cause.response
-        body = (r.text or "")[:max_body]
-        if body:
-            return f"HTTP {r.status_code} {r.reason_phrase}: {body}"
-        return f"HTTP {r.status_code} {r.reason_phrase}"
-    return str(exc)
+        log.error("%s (HTTP %s)", message, cause.response.status_code)
+        return
+    log.error("%s (%s)", message, type(cause).__name__)
+
+
+def format_api_error(exc: BaseException, max_body: int = 600) -> str:
+    """Status-only message. LumApps response bodies are not returned to the caller."""
+    del max_body  # kept so existing callers that pass it do not break
+    cause = exc
+    if isinstance(exc, RetryError) and getattr(exc, "last_attempt", None):
+        attempt = exc.last_attempt
+        if getattr(attempt, "failed", False) and getattr(attempt, "outcome", None):
+            cause = attempt.outcome.exception() or exc
+    if isinstance(cause, httpx.HTTPStatusError):
+        return f"The LumApps request failed (HTTP {cause.response.status_code})."
+    return "The LumApps request failed."

@@ -26,3 +26,6 @@ docs
 .cursor
 .plans
 *.plan.md
+tests
+.github
+k8s

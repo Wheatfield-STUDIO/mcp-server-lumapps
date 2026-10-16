@@ -18,13 +18,19 @@ from typing import Any, Dict
 import logging
 
 from app.core.config import settings
-from app.tools.api_error_utils import format_api_error, is_permission_denied, PERMISSION_DENIED_MESSAGE
+from app.tools.api_error_utils import (
+    format_api_error,
+    is_permission_denied,
+    log_tool_failure,
+    PERMISSION_DENIED_MESSAGE,
+)
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
 
 logger = logging.getLogger(__name__)
 
 TOOL_NAME = "update_site_global_settings"
+TOOL_SENSITIVITY = "structural"
 
 TOOL_SCHEMA = {
     "name": TOOL_NAME,
@@ -116,7 +122,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     try:
         token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
     except Exception as e:
-        logger.exception("update_site_global_settings get_token failed")
+        log_tool_failure(logger, "update_site_global_settings get_token failed", e)
         return {
             "content": [
                 {"type": "text", "text": f"Could not get token: {format_api_error(e)}."}
@@ -130,7 +136,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         try:
             data = await lumapps_client.get_style_by_instance(site_id, token=token)
         except Exception as e:
-            logger.exception("update_site_global_settings get_style_by_instance failed")
+            log_tool_failure(logger, "update_site_global_settings get_style_by_instance failed", e)
             return {
                 "content": [
                     {
@@ -172,7 +178,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         try:
             await lumapps_client.save_style(style, token=token)
         except Exception as e:
-            logger.exception("update_site_global_settings save_style failed")
+            log_tool_failure(logger, "update_site_global_settings save_style failed", e)
             text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Could not save style: {format_api_error(e)}."
             return {
                 "content": [{"type": "text", "text": text}]
@@ -184,7 +190,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         try:
             instance = await lumapps_client.get_instance(site_id, token=token)
         except Exception as e:
-            logger.exception("update_site_global_settings get_instance failed")
+            log_tool_failure(logger, "update_site_global_settings get_instance failed", e)
             return {
                 "content": [
                     {
@@ -209,7 +215,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         try:
             await lumapps_client.save_instance(instance, token=token)
         except Exception as e:
-            logger.exception("update_site_global_settings save_instance failed")
+            log_tool_failure(logger, "update_site_global_settings save_instance failed", e)
             text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Could not save instance (head): {format_api_error(e)}."
             return {
                 "content": [{"type": "text", "text": text}]

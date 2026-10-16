@@ -29,6 +29,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 TOOL_NAME = "get_useful_links"
+TOOL_SENSITIVITY = "read"
 
 TOOL_SCHEMA = {
     "name": TOOL_NAME,
@@ -90,7 +91,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Missing 'user_email' argument")
 
     search_limit = min(max(limit * 3, 30), 50)
-    logger.info(f"Executing get_useful_links for {user_email} (lang: {language}) with query: {query}")
+    logger.info("Executing get_useful_links lang=%s", language)
     token = await lumapps_auth.get_token(user_email=user_email)
     items = await lumapps_client.search(
         query, token=token, limit=search_limit, lang=language

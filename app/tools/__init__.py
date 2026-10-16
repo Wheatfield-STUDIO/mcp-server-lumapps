@@ -21,7 +21,14 @@ from typing import Any, Dict, Callable, Awaitable
 
 from app.jsonrpc.dispatcher import dispatcher
 from app.core.user_context import get_user_context
-from app.core.rbac import authorize_tool_call, get_tool_sensitivity, RBACError
+from app.core.rbac import (
+    CONTENT_TOOLS,
+    READ_TOOLS,
+    STRUCTURAL_TOOLS,
+    authorize_tool_call,
+    get_tool_sensitivity,
+    RBACError,
+)
 import logging
 
 from app.tools import (
@@ -67,27 +74,68 @@ def _build_registry() -> None:
 
 _build_registry()
 
+_TOOL_MODULES = (
+    search_content,
+    get_content_body,
+    find_person,
+    get_useful_links,
+    inspect_lumapps_element,
+    update_global_css,
+    update_site_global_settings,
+    update_widget_style,
+    search_site,
+)
+
+
+def _assert_tool_sensitivity() -> None:
+    """Fail at import if a tool's declared sensitivity drifts from the RBAC sets."""
+    declared: Dict[str, str] = {}
+    for mod in _TOOL_MODULES:
+        sensitivity = getattr(mod, "TOOL_SENSITIVITY", None)
+        if sensitivity not in ("read", "content", "structural"):
+            raise RuntimeError(f"{mod.TOOL_NAME} is missing TOOL_SENSITIVITY")
+        if get_tool_sensitivity(mod.TOOL_NAME) != sensitivity:
+            raise RuntimeError(
+                f"{mod.TOOL_NAME} TOOL_SENSITIVITY={sensitivity} does not match RBAC"
+            )
+        declared[mod.TOOL_NAME] = sensitivity
+    classified = {
+        **{name: "read" for name in READ_TOOLS},
+        **{name: "content" for name in CONTENT_TOOLS},
+        **{name: "structural" for name in STRUCTURAL_TOOLS},
+    }
+    expected = dict(declared)
+    expected["search_lumapps"] = "read"
+    if classified != expected:
+        raise RuntimeError("RBAC tool sets do not match the registered tools")
+
+
+_assert_tool_sensitivity()
+
 
 def _resolve_user_email(arguments: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Inject verified user_email from OIDC context when present; reject mismatched
-    client-supplied user_email. When no context (API key mode), keep arguments as-is.
+    user_email comes only from the validated OIDC token.
+    An API key can open a session (initialize, tools/list). It is not a LumApps user.
     """
     ctx = get_user_context()
-    if ctx is not None:
-        resolved = ctx.resolved_email()
-        if not resolved:
-            raise ValueError("OIDC token has no email or identifier for LumApps user context")
-        supplied = arguments.get("user_email")
-        if supplied and supplied.strip().lower() != resolved.strip().lower():
-            raise ValueError(
-                "user_email in request does not match authenticated identity; "
-                "use the identity from your session"
-            )
-        args = dict(arguments)
-        args["user_email"] = resolved
-        return args
-    return arguments
+    if ctx is None:
+        raise ValueError(
+            "An API key is not an authenticated user. Connect with OAuth so LumApps "
+            "is called as the signed-in Entra account."
+        )
+    resolved = ctx.resolved_email()
+    if not resolved:
+        raise ValueError("OIDC token has no email or identifier for LumApps user context")
+    supplied = arguments.get("user_email")
+    if supplied and str(supplied).strip().lower() != resolved.strip().lower():
+        raise ValueError(
+            "user_email in request does not match authenticated identity; "
+            "use the identity from your session"
+        )
+    args = dict(arguments)
+    args["user_email"] = resolved
+    return args
 
 
 async def _get_read_token_for_rbac(arguments: Dict[str, Any]) -> Any:
@@ -98,8 +146,8 @@ async def _get_read_token_for_rbac(arguments: Dict[str, Any]) -> Any:
         return None
     try:
         return await lumapps_auth.get_token(user_email=user_email, profile="read")
-    except Exception as e:
-        logger.debug("RBAC: could not get read token for site resolution: %s", e)
+    except Exception:
+        logger.debug("RBAC: could not get read token for site resolution")
         return None
 
 
@@ -163,12 +211,10 @@ async def initialize(params: Any) -> Dict[str, Any]:
     return {
         "protocolVersion": "2025-06-18",
         "capabilities": {
-            "logging": {},
-            "prompts": {"listChanged": True},
-            "tools": {"listChanged": True},
-            "resources": {"subscribe": False, "listChanged": True},
+            "tools": {"listChanged": False},
+            "resources": {"subscribe": False, "listChanged": False},
         },
-        "serverInfo": {"name": "lumapps-mcp-server", "version": "1.0.0"},
+        "serverInfo": {"name": "lumapps-mcp-server", "version": "1.1.0"},
     }
 
 

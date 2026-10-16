@@ -12,19 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from fastapi import FastAPI, Request, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from app.routers import sse, messages, streamable_http, oauth_metadata
-from app.core.logging import setup_logging
-from app.core.security import AuthResult, validate_api_key_header_or_query
-from app import tools  # noqa: F401
 import logging
 import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app import tools  # noqa: F401
+from app.core.config import settings
+from app.core.http_guard import (
+    BodySizeLimitMiddleware,
+    RateLimitMiddleware,
+    SecurityHeadersMiddleware,
+)
+from app.core.logging import setup_logging
+from app.routers import oauth_metadata, streamable_http
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="LumApps MCP Server")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    if settings.LUMAPPS_ACCESS_TOKEN:
+        logger.warning(
+            "LUMAPPS_ACCESS_TOKEN is set. Every LumApps call uses that one token, "
+            "including writes. Unset it so each call uses the signed-in user."
+        )
+    yield
+
+
+_docs = settings.EXPOSE_API_DOCS
+app = FastAPI(
+    title="LumApps MCP Server",
+    docs_url="/docs" if _docs else None,
+    redoc_url="/redoc" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
+    lifespan=lifespan,
+)
 
 _origins = [
     "http://localhost:6274",
@@ -32,18 +58,30 @@ _origins = [
 ]
 if extra := os.getenv("CORS_ORIGINS", "").strip():
     _origins.extend(o.strip() for o in extra.split(",") if o.strip())
+
+# Last add_middleware is the outermost wrapper.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "X-API-Key",
+        "Mcp-Session-Id",
+        "Mcp-Protocol-Version",
+        "Last-Event-ID",
+    ],
 )
+app.add_middleware(BodySizeLimitMiddleware)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(oauth_metadata.router)
 app.include_router(streamable_http.router)
-app.include_router(sse.router)
-app.include_router(messages.router)
+
 
 @app.get("/health")
 async def health_check():
@@ -59,52 +97,8 @@ async def readiness_check():
 
 @app.get("/")
 async def root_get():
-    """Informational: no auth required. Use /mcp or /messages for MCP JSON-RPC."""
+    """Informational: no auth required. MCP is Streamable HTTP at /mcp."""
     return {
         "message": "LumApps MCP Server is running",
-        "docs": "/docs",
-        "endpoints": {
-            "mcp": "/mcp",
-            "sse": "/sse",
-            "messages": "/messages",
-        },
-    }
-
-
-@app.post("/")
-async def root_post(
-    request: Request,
-    auth_result: AuthResult = Depends(validate_api_key_header_or_query),
-):
-    """
-    Authenticated JSON-RPC at root. Prefer /mcp (streamable HTTP) or /messages for MCP.
-    Same auth as /mcp: Bearer (OIDC) or API key when fallback enabled.
-    """
-    try:
-        body = await request.json()
-        if (isinstance(body, dict) and body.get("jsonrpc") == "2.0") or (
-            isinstance(body, list)
-            and len(body) > 0
-            and isinstance(body[0], dict)
-            and body[0].get("jsonrpc") == "2.0"
-        ):
-            from app.jsonrpc.models import JSONRPCRequest
-            from app.jsonrpc.dispatcher import dispatcher
-
-            method = body.get("method") if isinstance(body, dict) else "batch"
-            logger.info("Handling JSON-RPC request at root URL: %s", method)
-            if isinstance(body, list):
-                results = []
-                for item in body:
-                    rpc_req = JSONRPCRequest(**item)
-                    results.append(await dispatcher.dispatch(rpc_req))
-                return results
-            rpc_req = JSONRPCRequest(**body)
-            return await dispatcher.dispatch(rpc_req)
-    except Exception as e:
-        logger.debug("Root POST: not JSON-RPC or error: %s", e)
-    return {
-        "message": "LumApps MCP Server is running",
-        "docs": "/docs",
-        "endpoints": {"mcp": "/mcp", "sse": "/sse", "messages": "/messages"},
+        "endpoints": {"mcp": "/mcp"},
     }

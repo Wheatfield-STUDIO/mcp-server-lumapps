@@ -24,6 +24,7 @@ from app.services.lumapps_client import lumapps_client
 logger = logging.getLogger(__name__)
 
 TOOL_NAME = "search_site"
+TOOL_SENSITIVITY = "read"
 
 TOOL_SCHEMA = {
     "name": TOOL_NAME,
@@ -70,7 +71,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     if not user_email:
         raise ValueError("Missing 'user_email' argument")
 
-    logger.info(f"Executing search_site for {user_email}, name={name}, max_results={max_results}")
+    logger.info("Executing search_site max_results=%s", max_results)
     token = await lumapps_auth.get_token(user_email=user_email)
 
     data = await lumapps_client.instance_search(

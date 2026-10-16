@@ -110,7 +110,7 @@ async def mcp_post(
         req_id = body.get("id") if isinstance(body, dict) else None
         logger.info("MCP POST /mcp: method=%s id=%s", method, req_id)
     except Exception as e:
-        logger.warning(f"Invalid JSON body: {e}")
+        logger.warning("Invalid JSON body")
         return JSONResponse(
             status_code=400,
             content={
@@ -170,7 +170,7 @@ async def mcp_post(
                 "id": body.get("id"),
                 "error": {
                     "code": JSONRPCCodes.INVALID_REQUEST,
-                    "message": str(e),
+                    "message": "Invalid JSON-RPC request",
                 },
             },
             headers={"Content-Type": "application/json"},
