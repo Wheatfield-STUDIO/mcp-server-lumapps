@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 import logging
 
 from app.core.config import settings
+from app.core.connection_scope import ensure_site_in_scope
 from app.tools.api_error_utils import (
     format_api_error,
     is_permission_denied,
@@ -79,7 +80,8 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     if not user_email:
         raise ValueError("Missing 'user_email' argument")
 
-    logger.info(f"Executing update_global_css site_id={site_id}, append={append}")
+    ensure_site_in_scope(site_id)
+    logger.info("Executing update_global_css append=%s", append)
     try:
         token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
         data = await lumapps_client.get_style_by_instance(site_id, token=token)

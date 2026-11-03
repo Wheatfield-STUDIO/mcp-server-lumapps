@@ -20,6 +20,7 @@ Single endpoint: GET and POST /mcp.
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 from sse_starlette import EventSourceResponse
+from app.core.connection_scope import reset_connection_scope, scope_from_query, set_connection_scope
 from app.core.security import AuthResult, validate_api_key_header_or_query
 from app.jsonrpc.models import JSONRPCRequest, JSONRPCResponse
 from app.jsonrpc.dispatcher import dispatcher
@@ -48,10 +49,20 @@ def _is_request(body: dict) -> bool:
     return "method" in body and body.get("id") is not None
 
 
+async def bind_mcp_connection_scope(request: Request):
+    """Apply sites/pages from this /mcp URL only. The id lists are not logged."""
+    token = set_connection_scope(scope_from_query(request.query_params))
+    try:
+        yield
+    finally:
+        reset_connection_scope(token)
+
+
 @router.get("/mcp")
 async def mcp_get(
     request: Request,
     auth_result: AuthResult = Depends(validate_api_key_header_or_query),
+    _scope=Depends(bind_mcp_connection_scope),
 ):
     """
     Streamable HTTP: GET opens an SSE stream for server-to-client messages.
@@ -82,6 +93,7 @@ async def mcp_get(
 async def mcp_post(
     request: Request,
     auth_result: AuthResult = Depends(validate_api_key_header_or_query),
+    _scope=Depends(bind_mcp_connection_scope),
 ):
     """
     Streamable HTTP: POST sends one JSON-RPC message (request, notification, or response).

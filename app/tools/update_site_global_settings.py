@@ -18,6 +18,7 @@ from typing import Any, Dict
 import logging
 
 from app.core.config import settings
+from app.core.connection_scope import ensure_site_in_scope
 from app.tools.api_error_utils import (
     format_api_error,
     is_permission_denied,
@@ -112,9 +113,9 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
             ]
         }
 
+    ensure_site_in_scope(site_id)
     logger.info(
-        "Executing update_site_global_settings site_id=%s footer=%s head=%s",
-        site_id,
+        "Executing update_site_global_settings footer=%s head=%s",
         bool(footer_updates),
         bool(head_html),
     )

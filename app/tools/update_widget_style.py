@@ -18,6 +18,7 @@ import json
 import logging
 from typing import Any, Dict, List, Tuple
 
+from app.core.connection_scope import ConnectionScopeError, ensure_page_in_scope
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
 from app.tools.api_error_utils import (
@@ -157,11 +158,14 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(style_updates, dict):
         return {"content": [{"type": "text", "text": "style_updates must be a JSON object."}]}
 
-    logger.info(f"Executing update_widget_style content_id={content_id!r}, widget_id={widget_id!r}")
+    logger.info("Executing update_widget_style")
 
     try:
         token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
+        await ensure_page_in_scope(content_id, token)
         layout = await lumapps_client.get_content_layout(content_id, token=token)
+    except ConnectionScopeError:
+        raise
     except Exception as e:
         log_tool_failure(logger, "get_content_layout failed", e)
         text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Failed to load layout: {format_api_error(e)}"

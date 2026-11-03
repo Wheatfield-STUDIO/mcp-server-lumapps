@@ -72,6 +72,25 @@ Authorize, token, and refresh URLs in that document point at Entra. There is no 
 | Dynamic (Authorization URL + Token URL) | Does not attach. That mode still requires the client to register itself. |
 | Manual | Attaches. Field values are in [docs/deploy-azure.md](docs/deploy-azure.md). |
 
+## Connection scope
+
+Copilot Studio’s connection form only has a display name. The maker puts a site or page filter in the MCP server URL. The model cannot change that URL. The filter is read on `GET /mcp` and `POST /mcp` only. The same parameters on any other path are ignored. The id lists are not written to the logs.
+
+| Query parameter | Meaning |
+| --- | --- |
+| `sites` | Comma-separated LumApps site (instance) ids. |
+| `pages` | Comma-separated LumApps content ids. |
+
+| URL | What the connection can touch |
+| --- | --- |
+| `https://<hostname>/mcp` | No extra filter. LumApps user rights only. A parameter that is absent does not filter. |
+| `https://<hostname>/mcp?sites=<site-id>,<site-id>` | Sites in that list, and pages that sit on those sites. |
+| `https://<hostname>/mcp?pages=<content-id>,<content-id>` | Those pages only. Site tools are unchanged, because `sites` is absent. |
+| `https://<hostname>/mcp?sites=<site-id>&pages=<content-id>` | A page must be in `pages` and on a site in `sites`. |
+| `https://<hostname>/mcp?sites=` or `?pages=` | The parameter is present but empty, so that list allows nothing. An empty `sites` list also rejects pages, because a page would not be on an allowed site. |
+
+The filter runs before a tool result is returned. Search, useful links, and site list drop anything outside the list. When `sites` is set, a search hit with no site id is dropped. Get body, inspect, widget style, global CSS, and site settings reject the call before the write or the body is returned. `find_person` is a person directory, not a site or a page, so this URL filter does not apply to it. LumApps permissions still apply on top of the URL filter.
+
 ## RBAC
 
 `RBAC_ENABLED` defaults to true. Read tools run for any signed-in employee. Content and structural tools also ask LumApps what that employee is allowed to do (`RBAC_USE_LUMAPPS_NATIVE`, default true):

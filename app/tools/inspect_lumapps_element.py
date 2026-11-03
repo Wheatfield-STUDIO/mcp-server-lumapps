@@ -18,6 +18,7 @@ import json
 import logging
 from typing import Any, Dict, List
 
+from app.core.connection_scope import ConnectionScopeError, ensure_page_in_scope, ensure_site_in_scope
 from app.tools.api_error_utils import format_api_error, log_tool_failure
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
@@ -174,9 +175,12 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Executing inspect_lumapps_element layout")
         try:
             token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
+            await ensure_page_in_scope(content_id, token)
             layout = await lumapps_client.get_content_layout(content_id, token=token)
             text = _format_layout_response(layout)
             return {"content": [{"type": "text", "text": text}]}
+        except ConnectionScopeError:
+            raise
         except Exception as e:
             log_tool_failure(logger, "inspect_lumapps_element layout API failed", e)
             return {
@@ -190,6 +194,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
 
     if site_id:
         logger.info("Executing inspect_lumapps_element style")
+        ensure_site_in_scope(site_id)
         try:
             token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
             data = await lumapps_client.get_style_by_instance(site_id, token=token)

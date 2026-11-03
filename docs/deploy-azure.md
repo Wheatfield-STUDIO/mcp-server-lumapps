@@ -117,9 +117,23 @@ Omit `LUMAPPS_ADMIN_*` only if this deployment is read-only. Content and structu
 
 ## 5. Copilot Studio Manual wizard
 
-In the agent, add a tool of type MCP. Server URL:
+In the agent, add a tool of type MCP. The connection form only has a display name, so a site or page limit goes in the server URL. The model cannot change that URL. Use one URL per connection.
 
-`https://<container-app-hostname>/mcp`
+| Connection | Server URL |
+| --- | --- |
+| Whole intranet the employee can already open | `https://<container-app-hostname>/mcp` |
+| Specific sites | `https://<container-app-hostname>/mcp?sites=<site-id>,<site-id>` |
+| Specific pages | `https://<container-app-hostname>/mcp?pages=<content-id>,<content-id>` |
+| Specific pages on specific sites | `https://<container-app-hostname>/mcp?sites=<site-id>&pages=<content-id>,<content-id>` |
+
+`sites` and `pages` are read only on `/mcp`.
+
+- A parameter that is absent does not filter. With neither parameter, behavior is LumApps user rights only.
+- A parameter that is present lists the only ids allowed for that dimension. Ids are comma-separated.
+- When both are set, a page must be in `pages` and on a site in `sites`.
+- A parameter present but empty (`?sites=` or `?pages=`) allows nothing for that list. Empty `sites` also rejects pages.
+
+Search, useful links, and the site list drop rows outside the list. A search hit with no site id is dropped when `sites` is set. Reading a page, inspecting, changing a widget, changing global CSS, and changing site settings are rejected before that result is returned. These ids are not written to the logs.
 
 Choose **Manual** authentication.
 

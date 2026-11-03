@@ -20,6 +20,7 @@ Registry built from TOOL_NAME, TOOL_SCHEMA, handle() in each module.
 from typing import Any, Dict, Callable, Awaitable
 
 from app.jsonrpc.dispatcher import dispatcher
+from app.core.connection_scope import ensure_page_in_scope, ensure_site_in_scope, get_connection_scope
 from app.core.user_context import get_user_context
 from app.core.rbac import (
     CONTENT_TOOLS,
@@ -138,6 +139,35 @@ def _resolve_user_email(arguments: Dict[str, Any]) -> Dict[str, Any]:
     return args
 
 
+_PAGE_ARGUMENT_TOOLS = {"get_content_body", "update_widget_style"}
+_SITE_ARGUMENT_TOOLS = {"update_global_css", "update_site_global_settings"}
+
+
+async def _enforce_connection_scope(name: str, arguments: Dict[str, Any]) -> None:
+    """Reject a targeted site or page before RBAC or the handler runs."""
+    scope = get_connection_scope()
+    if scope.sites is None and scope.pages is None:
+        return
+    content_id = arguments.get("content_id") if isinstance(arguments.get("content_id"), str) else None
+    site_id = arguments.get("site_id") if isinstance(arguments.get("site_id"), str) else None
+    kind = name
+    if name == "inspect_lumapps_element":
+        if content_id:
+            kind = "get_content_body"
+        elif site_id:
+            kind = "update_global_css"
+        else:
+            return
+    if kind in _SITE_ARGUMENT_TOOLS:
+        ensure_site_in_scope(site_id)
+        return
+    if kind in _PAGE_ARGUMENT_TOOLS:
+        token = None
+        if scope.sites:
+            token = await _get_read_token_for_rbac(arguments)
+        await ensure_page_in_scope(content_id, token)
+
+
 async def _get_read_token_for_rbac(arguments: Dict[str, Any]) -> Any:
     """Optional read token for content_id -> site_id resolution in RBAC (structural and content tools)."""
     from app.services.lumapps_auth import lumapps_auth
@@ -162,6 +192,7 @@ async def tools_call(params: Any) -> Dict[str, Any]:
         available = sorted({s["name"] for s, _ in TOOLS.values()})
         raise ValueError(f"Unknown tool: {name}. Available: {', '.join(available)}")
     arguments = _resolve_user_email(arguments)
+    await _enforce_connection_scope(name, arguments)
     token = None
     sensitivity = get_tool_sensitivity(name)
     if sensitivity in ("structural", "content") and arguments.get("user_email"):

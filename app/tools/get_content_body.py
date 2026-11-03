@@ -17,6 +17,7 @@
 from typing import Any, Dict
 
 from app.core.config import settings
+from app.core.connection_scope import ensure_page_in_scope
 from app.services.html_parser import get_localized_value, html_parser
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
@@ -56,6 +57,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
 
     logger.info("Executing get_content_body")
     token = await lumapps_auth.get_token(user_email=user_email)
+    await ensure_page_in_scope(content_id, token)
     content_data = await lumapps_client.get_content(content_id, token=token, lang=language)
     parsed_list = html_parser.parse(content_data, lang=language, include_excerpt=False)
     full_text = "\n".join([c["text"] for c in parsed_list if c.get("text")])

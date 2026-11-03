@@ -21,6 +21,7 @@ detailed summaries, the AI must call get_content_body with the chosen content_id
 from typing import Any, Dict
 
 from app.core.config import settings
+from app.core.connection_scope import filter_page_items, get_connection_scope
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
 import logging
@@ -88,8 +89,12 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Missing 'user_email' argument")
 
     logger.info("Executing search_content lang=%s", language)
-    token = await lumapps_auth.get_token(user_email=user_email)
-    items = await lumapps_client.search(query, token=token, limit=settings.MAX_SEARCH_RESULTS, lang=language)
+    if get_connection_scope().blocks_all_pages():
+        items = []
+    else:
+        token = await lumapps_auth.get_token(user_email=user_email)
+        items = await lumapps_client.search(query, token=token, limit=settings.MAX_SEARCH_RESULTS, lang=language)
+        items = filter_page_items(items)
 
     base_url = settings.SITE_BASE_URL.rstrip("/")
     results = []
