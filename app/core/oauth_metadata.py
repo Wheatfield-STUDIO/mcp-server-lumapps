@@ -25,10 +25,12 @@ registration endpoint and no password login.
 
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote, unquote
 
 from fastapi import Request
 
 from app.core.config import settings
+from app.core.connection_scope import recognized_mcp_path
 
 _TENANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.\-]{0,127}$")
 _GUID_RE = re.compile(
@@ -187,8 +189,55 @@ def public_origin(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
+_PROTECTED_RESOURCE = "/.well-known/oauth-protected-resource"
+
+
+def _request_path(request: Request) -> str:
+    return unquote(request.scope.get("path") or request.url.path)
+
+
+def mcp_resource_path(request: Request) -> str:
+    """MCP path this request is about. Bare metadata and bare ``/mcp`` stay ``/mcp``.
+
+    A scoped path is returned whole so the ``resource`` identifier keeps the
+    site and page ids. The ids are not logged.
+    """
+    path = _request_path(request)
+    if path == _PROTECTED_RESOURCE or path.startswith(_PROTECTED_RESOURCE + "/"):
+        suffix = path[len(_PROTECTED_RESOURCE):]
+        if suffix in ("", "/"):
+            return "/mcp"
+        candidate = suffix.rstrip("/") if len(suffix) > 1 and suffix.endswith("/") else suffix
+        if recognized_mcp_path(candidate):
+            return candidate
+        return "/mcp"
+    candidate = path.rstrip("/") if len(path) > 1 and path.endswith("/") else path
+    if recognized_mcp_path(candidate):
+        return candidate
+    return "/mcp"
+
+
+def metadata_resource_path(request: Request) -> Optional[str]:
+    """Resource path for a protected-resource metadata URL, or None if it is not ours."""
+    path = _request_path(request)
+    if path == _PROTECTED_RESOURCE or path == _PROTECTED_RESOURCE + "/":
+        return "/mcp"
+    if not path.startswith(_PROTECTED_RESOURCE + "/"):
+        return None
+    suffix = path[len(_PROTECTED_RESOURCE):]
+    candidate = suffix.rstrip("/") if len(suffix) > 1 and suffix.endswith("/") else suffix
+    if recognized_mcp_path(candidate):
+        return candidate
+    return None
+
+
+def _quoted_resource_path(resource_path: str) -> str:
+    """Encode a resource path for a URL or header. Slashes and commas stay."""
+    return "/".join(quote(part, safe=",-._~") for part in resource_path.split("/"))
+
+
 def resource_url(request: Request) -> str:
-    return f"{public_origin(request)}/mcp"
+    return f"{public_origin(request)}{_quoted_resource_path(mcp_resource_path(request))}"
 
 
 def protected_resource_metadata(request: Request) -> Optional[Dict[str, Any]]:
@@ -247,7 +296,8 @@ def www_authenticate_header(request: Request) -> Optional[str]:
     """RFC 9728 challenge so a 401 points at protected-resource metadata."""
     if not discovery_enabled():
         return None
-    metadata = f"{public_origin(request)}/.well-known/oauth-protected-resource/mcp"
+    suffix = _quoted_resource_path(mcp_resource_path(request)).lstrip("/")
+    metadata = f"{public_origin(request)}/.well-known/oauth-protected-resource/{suffix}"
     parts = ['Bearer realm="mcp"']
     scopes = configured_scopes()
     if scopes:

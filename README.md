@@ -74,22 +74,23 @@ Authorize, token, and refresh URLs in that document point at Entra. There is no 
 
 ## Connection scope
 
-Copilot Studio’s connection form only has a display name. The maker puts a site or page filter in the MCP server URL. The model cannot change that URL. The filter is read on `GET /mcp` and `POST /mcp` only. The same parameters on any other path are ignored. The id lists are not written to the logs.
+Copilot Studio’s connection form only has a display name. The maker puts a site or page filter in the MCP server URL. The model cannot change that URL. The id lists are not written to the logs.
 
-| Query parameter | Meaning |
+Use the path form. Copilot fetches `/.well-known/oauth-protected-resource/...` for the server URL and then calls the `resource` value in that document. That value used to be the origin plus `/mcp`, so `?pages=` was dropped and the search returned the user’s full LumApps rights. The path is part of the resource identifier, and the metadata for that path advertises the same path.
+
+| Server URL | What the connection can touch |
 | --- | --- |
-| `sites` | Comma-separated LumApps site (instance) ids. |
-| `pages` | Comma-separated LumApps content ids. |
+| `https://<hostname>/mcp` | No extra filter. LumApps user rights only. |
+| `https://<hostname>/mcp/sites/<site-id>,<site-id>` | Sites in that list, and pages that sit on those sites. |
+| `https://<hostname>/mcp/pages/<content-id>,<content-id>` | Those pages only. Site tools are unchanged, because no site list is set. |
+| `https://<hostname>/mcp/sites/<site-id>/pages/<content-id>,<content-id>` | A page must be listed and on an allowed site. |
+| `https://<hostname>/mcp/sites` or `https://<hostname>/mcp/pages` | The list is present but empty, so that dimension allows nothing. An empty site list also rejects pages, because a page would not be on an allowed site. |
 
-| URL | What the connection can touch |
-| --- | --- |
-| `https://<hostname>/mcp` | No extra filter. LumApps user rights only. A parameter that is absent does not filter. |
-| `https://<hostname>/mcp?sites=<site-id>,<site-id>` | Sites in that list, and pages that sit on those sites. |
-| `https://<hostname>/mcp?pages=<content-id>,<content-id>` | Those pages only. Site tools are unchanged, because `sites` is absent. |
-| `https://<hostname>/mcp?sites=<site-id>&pages=<content-id>` | A page must be in `pages` and on a site in `sites`. |
-| `https://<hostname>/mcp?sites=` or `?pages=` | The parameter is present but empty, so that list allows nothing. An empty `sites` list also rejects pages, because a page would not be on an allowed site. |
+`GET` and `POST` of those paths apply the filter. `/.well-known/oauth-protected-resource` followed by the same path returns a document whose `resource` is that full URL, not bare `/mcp`. A list that is absent does not filter. Ids are comma-separated.
 
-The filter runs before a tool result is returned. Search, useful links, and site list drop anything outside the list. When `sites` is set, a search hit with no site id is dropped. Get body, inspect, widget style, global CSS, and site settings reject the call before the write or the body is returned. `find_person` is a person directory, not a site or a page, so this URL filter does not apply to it. LumApps permissions still apply on top of the URL filter.
+`sites` and `pages` on the query string of `/mcp` still work for a client that keeps the query string. Copilot Studio does not, so the Copilot server URL is the path form, not `?pages=`. If a path and a query string both set the same list, an id has to be in both.
+
+The filter runs before a tool result is returned. Search, useful links, and site list drop anything outside the list. When a site list is set, a search hit with no site id is dropped. Get body, inspect, widget style, global CSS, and site settings reject the call before the write or the body is returned. `find_person` is a person directory, not a site or a page, so this URL filter does not apply to it. LumApps permissions still apply on top of the URL filter.
 
 ## RBAC
 

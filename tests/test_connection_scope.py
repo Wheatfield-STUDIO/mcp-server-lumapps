@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Connection filters from the /mcp query string: absent, sites, pages, both, empty."""
+"""Connection filters from the MCP URL: query string, path form, and bare /mcp."""
 
 import asyncio
 from contextlib import contextmanager
@@ -26,7 +26,10 @@ from app.core.connection_scope import (
     ConnectionScope,
     ConnectionScopeError,
     get_connection_scope,
+    merge_scopes,
+    recognized_mcp_path,
     reset_connection_scope,
+    scope_from_mcp_path,
     scope_from_query,
     set_connection_scope,
 )
@@ -213,6 +216,122 @@ def test_mcp_url_sets_scope_for_tools(client: TestClient, monkeypatch: pytest.Mo
     assert health.status_code == 200
     assert get_connection_scope().sites is None
     assert get_connection_scope().pages is None
+
+
+def test_path_scope_and_bare_path(client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """Path lists reach the tool. Bare /mcp does not filter. Ids are not logged."""
+    assert scope_from_mcp_path("/mcp") == ConnectionScope(None, None)
+    assert scope_from_mcp_path("/mcp/pages/page-1,page-2") == ConnectionScope(None, frozenset({PAGE_1, PAGE_2}))
+    assert scope_from_mcp_path("/mcp/sites/site-a,site-b") == ConnectionScope(frozenset({SITE_A, SITE_B}), None)
+    assert scope_from_mcp_path("/mcp/sites/site-a/pages/page-1") == ConnectionScope(
+        frozenset({SITE_A}), frozenset({PAGE_1})
+    )
+    assert scope_from_mcp_path("/mcp/pages") == ConnectionScope(None, frozenset())
+    assert scope_from_mcp_path("/mcp/pages/") == ConnectionScope(None, frozenset())
+    assert scope_from_mcp_path("/mcp/sites") == ConnectionScope(frozenset(), None)
+    assert scope_from_mcp_path("/mcp/sites/site-a/pages") == ConnectionScope(frozenset({SITE_A}), frozenset())
+    assert scope_from_mcp_path("/mcp/pages/,") == ConnectionScope(None, frozenset())
+    assert not recognized_mcp_path("/mcp/other")
+    both = merge_scopes(
+        scope_from_mcp_path("/mcp/pages/page-1"),
+        scope_from_query(QueryParams("sites=site-a")),
+    )
+    assert both == ConnectionScope(frozenset({SITE_A}), frozenset({PAGE_1}))
+    narrowed = merge_scopes(
+        scope_from_mcp_path("/mcp/pages/page-1,page-2"),
+        scope_from_query(QueryParams("pages=page-2")),
+    )
+    assert narrowed.pages == frozenset({PAGE_2})
+
+    seen = {}
+
+    async def handle(arguments):
+        scope = get_connection_scope()
+        seen["sites"] = scope.sites
+        seen["pages"] = scope.pages
+        return {"content": [{"type": "text", "text": "ok"}]}
+
+    schema, _handler = TOOLS["search_content"]
+    monkeypatch.setitem(TOOLS, "search_content", (schema, handle))
+    monkeypatch.setattr(
+        "app.tools._resolve_user_email",
+        lambda arguments: {**arguments, "user_email": "ada@example.com"},
+    )
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "search_content", "arguments": {"query": "handbook", "user_email": "ada@example.com"}},
+    }
+    headers = {"X-API-Key": "test-mcp-api-key"}
+    cases = (
+        ("/mcp", None, None),
+        ("/mcp/pages/page-1", None, frozenset({PAGE_1})),
+        ("/mcp/pages/page-1%2Cpage-2", None, frozenset({PAGE_1, PAGE_2})),
+        ("/mcp/sites/site-a,site-b", frozenset({SITE_A, SITE_B}), None),
+        ("/mcp/sites/site-a/pages/page-1,page-2", frozenset({SITE_A}), frozenset({PAGE_1, PAGE_2})),
+        ("/mcp/pages", None, frozenset()),
+        ("/mcp/sites", frozenset(), None),
+        ("/mcp/sites/site-a/pages", frozenset({SITE_A}), frozenset()),
+        ("/mcp/pages/page-1?sites=site-a", frozenset({SITE_A}), frozenset({PAGE_1})),
+    )
+    caplog.set_level("INFO")
+    for path, sites, pages in cases:
+        seen.clear()
+        response = client.post(path, headers=headers, json=body)
+        assert response.status_code == 200, path
+        assert seen["sites"] == sites
+        assert seen["pages"] == pages
+    combined = " ".join(
+        record.getMessage() for record in caplog.records if record.name.startswith("app.")
+    )
+    assert "page-1" not in combined
+    assert "site-a" not in combined
+
+    missing = client.post("/mcp/other", headers=headers, json=body)
+    assert missing.status_code == 404
+
+    with client.stream("GET", "/mcp/pages/page-1", headers=headers) as stream:
+        assert stream.status_code == 200
+        assert next(stream.iter_text())
+
+
+def test_path_scope_filters_search(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.tools._resolve_user_email",
+        lambda arguments: {**arguments, "user_email": "ada@example.com"},
+    )
+    hits = [
+        {"id": PAGE_1, "title": "Kept", "instance": SITE_A},
+        {"id": PAGE_2, "title": "Dropped", "instance": SITE_B},
+    ]
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "search_content", "arguments": {"query": "handbook", "user_email": "ada@example.com"}},
+    }
+    headers = {"X-API-Key": "test-mcp-api-key"}
+    with patch("app.tools.search_content.lumapps_auth.get_token", new_callable=AsyncMock):
+        with patch("app.tools.search_content.lumapps_client.search", new_callable=AsyncMock) as search:
+            search.return_value = list(hits)
+            scoped = client.post("/mcp/pages/page-1", headers=headers, json=body)
+            text = scoped.json()["result"]["content"][0]["text"]
+            assert "Kept" in text
+            assert "Dropped" not in text
+            both = client.post("/mcp/sites/site-a/pages/page-1,page-2", headers=headers, json=body)
+            both_text = both.json()["result"]["content"][0]["text"]
+            assert "Kept" in both_text
+            assert "Dropped" not in both_text
+            wrong_site = client.post("/mcp/sites/site-b/pages/page-1", headers=headers, json=body)
+            wrong_text = wrong_site.json()["result"]["content"][0]["text"]
+            assert "Found 0" in wrong_text
+            bare = client.post("/mcp", headers=headers, json=body)
+            bare_text = bare.json()["result"]["content"][0]["text"]
+            assert "Kept" in bare_text and "Dropped" in bare_text
+            empty = client.post("/mcp/pages", headers=headers, json=body)
+            assert "Found 0" in empty.json()["result"]["content"][0]["text"]
+            assert search.await_count == 4
 
 
 def test_query_api_key_still_rejected_when_scope_is_present(client: TestClient) -> None:

@@ -12,17 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Per-connection site and page filters from the /mcp query string.
+"""Per-connection site and page filters from the MCP URL.
 
 Copilot Studio's connection form has no field for these filters. The maker
 puts them in the server URL. The model cannot change that URL. A missing
-parameter does not filter. A parameter that is present but empty allows nothing.
+list does not filter. A list that is present but empty allows nothing.
+The path form (``/mcp/pages/...``, ``/mcp/sites/...``) is what Copilot keeps:
+its discovery call uses the advertised resource URL and drops a query string.
 """
 
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, unquote
 
 OUT_OF_SCOPE = "This connection is not allowed to use that site or page."
 
@@ -43,8 +45,8 @@ _CONTENT_KEYS = ("id", "uid", "contentId", "content_id")
 class ConnectionScope:
     """Allow-lists for this MCP connection.
 
-    ``None`` means the query parameter was absent (no filter).
-    An empty frozenset means the parameter was present but named nothing.
+    ``None`` means that list was absent (no filter).
+    An empty frozenset means the list was present but named nothing.
     """
 
     sites: Optional[frozenset]
@@ -119,6 +121,76 @@ def scope_from_query(params: Mapping[str, str]) -> ConnectionScope:
     return ConnectionScope(
         sites=None if sites_values is None else _ids_from_values(sites_values),
         pages=None if pages_values is None else _ids_from_values(pages_values),
+    )
+
+
+def _mcp_tail(path: str) -> Optional[List[str]]:
+    """Segments after ``/mcp``. ``[]`` is bare ``/mcp``. ``None`` is not an MCP path."""
+    raw = unquote((path or "").split("?", 1)[0])
+    if len(raw) > 1 and raw.endswith("/"):
+        raw = raw.rstrip("/")
+    parts = raw.split("/")
+    if len(parts) < 2 or parts[0] != "" or parts[1] != "mcp":
+        return None
+    return parts[2:]
+
+
+def recognized_mcp_path(path: str) -> bool:
+    """True for bare ``/mcp`` and the site/page path forms. Nothing else."""
+    tail = _mcp_tail(path)
+    if tail is None:
+        return False
+    if not tail:
+        return True
+    if tail[0] == "pages" and len(tail) in (1, 2):
+        return True
+    if tail[0] == "sites" and len(tail) in (1, 2):
+        return True
+    if tail[0] == "sites" and len(tail) in (3, 4) and tail[2] == "pages":
+        return True
+    return False
+
+
+def scope_from_mcp_path(path: str) -> ConnectionScope:
+    """Scope from an MCP path. Bare ``/mcp`` is unfiltered. Does not log ids.
+
+    A present segment with no ids (``/mcp/pages``, ``/mcp/sites``) is an empty
+    allow-list. An unrecognized path is unfiltered; the route rejects it.
+    """
+    tail = _mcp_tail(path)
+    if not tail:
+        return ConnectionScope(sites=None, pages=None)
+    if tail[0] == "pages" and len(tail) == 1:
+        return ConnectionScope(sites=None, pages=frozenset())
+    if tail[0] == "pages" and len(tail) == 2:
+        return ConnectionScope(sites=None, pages=_ids_from_values([tail[1]]))
+    if tail[0] == "sites" and len(tail) == 1:
+        return ConnectionScope(sites=frozenset(), pages=None)
+    if tail[0] == "sites" and len(tail) == 2:
+        return ConnectionScope(sites=_ids_from_values([tail[1]]), pages=None)
+    if tail[0] == "sites" and len(tail) == 3 and tail[2] == "pages":
+        return ConnectionScope(sites=_ids_from_values([tail[1]]), pages=frozenset())
+    if tail[0] == "sites" and len(tail) == 4 and tail[2] == "pages":
+        return ConnectionScope(
+            sites=_ids_from_values([tail[1]]),
+            pages=_ids_from_values([tail[3]]),
+        )
+    return ConnectionScope(sites=None, pages=None)
+
+
+def merge_scopes(path_scope: ConnectionScope, query_scope: ConnectionScope) -> ConnectionScope:
+    """Keep both filters. A dimension set on both must pass both lists."""
+
+    def _merge(left: Optional[frozenset], right: Optional[frozenset]) -> Optional[frozenset]:
+        if left is None:
+            return right
+        if right is None:
+            return left
+        return left & right
+
+    return ConnectionScope(
+        sites=_merge(path_scope.sites, query_scope.sites),
+        pages=_merge(path_scope.pages, query_scope.pages),
     )
 
 

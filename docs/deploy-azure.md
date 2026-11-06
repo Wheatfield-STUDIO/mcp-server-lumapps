@@ -119,21 +119,23 @@ Omit `LUMAPPS_ADMIN_*` only if this deployment is read-only. Content and structu
 
 In the agent, add a tool of type MCP. The connection form only has a display name, so a site or page limit goes in the server URL. The model cannot change that URL. Use one URL per connection.
 
+The server URL is the path form, not `?pages=`. Copilot fetches the protected-resource document and then calls the `resource` URL in it. A query string on `/mcp` is not part of that resource, so it is dropped and search returns the employee’s full LumApps rights. The path stays in the resource identifier. The metadata for that path advertises the same path.
+
 | Connection | Server URL |
 | --- | --- |
 | Whole intranet the employee can already open | `https://<container-app-hostname>/mcp` |
-| Specific sites | `https://<container-app-hostname>/mcp?sites=<site-id>,<site-id>` |
-| Specific pages | `https://<container-app-hostname>/mcp?pages=<content-id>,<content-id>` |
-| Specific pages on specific sites | `https://<container-app-hostname>/mcp?sites=<site-id>&pages=<content-id>,<content-id>` |
+| Specific sites | `https://<container-app-hostname>/mcp/sites/<site-id>,<site-id>` |
+| Specific pages | `https://<container-app-hostname>/mcp/pages/<content-id>,<content-id>` |
+| Specific pages on specific sites | `https://<container-app-hostname>/mcp/sites/<site-id>/pages/<content-id>,<content-id>` |
 
-`sites` and `pages` are read only on `/mcp`.
+`GET` and `POST` of those paths apply the filter. Bare `/mcp` stays unfiltered.
 
-- A parameter that is absent does not filter. With neither parameter, behavior is LumApps user rights only.
-- A parameter that is present lists the only ids allowed for that dimension. Ids are comma-separated.
-- When both are set, a page must be in `pages` and on a site in `sites`.
-- A parameter present but empty (`?sites=` or `?pages=`) allows nothing for that list. Empty `sites` also rejects pages.
+- A list that is absent does not filter. `/mcp` with no extra path is LumApps user rights only.
+- Ids are comma-separated. `/mcp/sites/<site-id>,<site-id>` allows those sites and the pages on them. `/mcp/pages/<content-id>,<content-id>` allows those pages only.
+- When both are in the path, a page must be listed and on an allowed site.
+- `/mcp/sites` or `/mcp/pages` with no ids allows nothing for that list. An empty site list also rejects pages.
 
-Search, useful links, and the site list drop rows outside the list. A search hit with no site id is dropped when `sites` is set. Reading a page, inspecting, changing a widget, changing global CSS, and changing site settings are rejected before that result is returned. These ids are not written to the logs.
+Search, useful links, and the site list drop rows outside the list. A search hit with no site id is dropped when a site list is set. Reading a page, inspecting, changing a widget, changing global CSS, and changing site settings are rejected before that result is returned. These ids are not written to the logs. A client that keeps a query string can still pass `sites` and `pages` on `/mcp`. Copilot Studio does not.
 
 Choose **Manual** authentication.
 
@@ -158,6 +160,7 @@ Replace the hostname. These commands do not send secrets.
 curl -sS "https://<container-app-hostname>/health"
 curl -sS "https://<container-app-hostname>/ready"
 curl -sS "https://<container-app-hostname>/.well-known/oauth-protected-resource/mcp"
+curl -sS "https://<container-app-hostname>/.well-known/oauth-protected-resource/mcp/pages/<content-id>"
 curl -sS "https://<container-app-hostname>/.well-known/oauth-authorization-server"
 curl -sS -D - -o /dev/null -X POST "https://<container-app-hostname>/mcp" \
   -H "content-type: application/json" \
@@ -167,7 +170,8 @@ curl -sS -D - -o /dev/null -X POST "https://<container-app-hostname>/mcp" \
 Expect:
 
 - `/health` and `/ready` return `{"status":"ok"}` and `{"status":"ready"}`.
-- The protected-resource document has `"resource": "https://<container-app-hostname>/mcp"` and `authorization_servers` equal to `https://login.microsoftonline.com/<tenant-id>/v2.0`.
+- The protected-resource document for `/mcp` has `"resource": "https://<container-app-hostname>/mcp"` and `authorization_servers` equal to `https://login.microsoftonline.com/<tenant-id>/v2.0`.
+- The document for `/mcp/pages/<content-id>` has `"resource": "https://<container-app-hostname>/mcp/pages/<content-id>"`, not bare `/mcp`. The same is true for `/mcp/sites/...` and `/mcp/sites/.../pages/...`.
 - The authorization-server document has Entra's authorize and token URLs and **no** `registration_endpoint`.
 - `POST /mcp` without a token returns **401** and a `WWW-Authenticate` header that points at the protected-resource document.
 - `POST /sse`, `POST /messages`, and `POST /` are not MCP endpoints (`404` or `405`).
@@ -176,4 +180,4 @@ After you connect Copilot and sign in, ask for a page the user can already open 
 
 ## 7. Railway retest
 
-The same environment names work on Railway. Set `ENTRA_TENANT_ID`, `OIDC_AUDIENCE`, `OIDC_SCOPES`, and `MCP_PUBLIC_URL` to the public Railway origin. Do not set `LUMAPPS_ACCESS_TOKEN`. An `X-API-Key` check can still call `initialize` and `tools/list`. Calling a tool requires the Entra Bearer token.
+The same environment names work on Railway. Set `ENTRA_TENANT_ID`, `OIDC_AUDIENCE`, `OIDC_SCOPES`, and `MCP_PUBLIC_URL` to the public Railway origin. Do not set `LUMAPPS_ACCESS_TOKEN`. The Copilot server URL is the path form (`/mcp/pages/...` or `/mcp/sites/...`), not `?pages=`. An `X-API-Key` check can still call `initialize` and `tools/list`. Calling a tool requires the Entra Bearer token.

@@ -139,6 +139,38 @@ def test_discovery_json(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> 
     assert f'scope="{SCOPE}"' in challenge
 
 
+def test_scoped_metadata_resource_url(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The advertised resource is the scoped path. Bare /mcp stays bare."""
+    _enable_entra(monkeypatch)
+    pages = client.get("/.well-known/oauth-protected-resource/mcp/pages/page-1,page-2")
+    sites = client.get("/.well-known/oauth-protected-resource/mcp/sites/site-a,site-b")
+    both = client.get("/.well-known/oauth-protected-resource/mcp/sites/site-a/pages/page-1")
+    bare = client.get("/.well-known/oauth-protected-resource/mcp")
+    root = client.get("/.well-known/oauth-protected-resource")
+    assert pages.status_code == 200
+    assert pages.json()["resource"] == f"{PUBLIC}/mcp/pages/page-1,page-2"
+    assert sites.json()["resource"] == f"{PUBLIC}/mcp/sites/site-a,site-b"
+    assert both.json()["resource"] == f"{PUBLIC}/mcp/sites/site-a/pages/page-1"
+    assert bare.json()["resource"] == f"{PUBLIC}/mcp"
+    assert root.json()["resource"] == f"{PUBLIC}/mcp"
+    assert pages.json()["authorization_servers"] == [ISSUER_V2]
+    assert client.get("/.well-known/oauth-protected-resource/not-mcp").status_code == 404
+
+    unauthorized = client.post("/mcp/pages/page-1", json=_INITIALIZE)
+    assert unauthorized.status_code == 401
+    challenge = unauthorized.headers["www-authenticate"]
+    assert (
+        f'resource_metadata="{PUBLIC}/.well-known/oauth-protected-resource/mcp/pages/page-1"'
+        in challenge
+    )
+    bare_challenge = client.post("/mcp", json=_INITIALIZE).headers["www-authenticate"]
+    assert f'resource_metadata="{PUBLIC}/.well-known/oauth-protected-resource/mcp"' in bare_challenge
+    quoted = client.post('/mcp/pages/bad"id', json=_INITIALIZE)
+    assert quoted.status_code == 401
+    assert "bad%22id" in quoted.headers["www-authenticate"]
+    assert 'bad"id' not in quoted.headers["www-authenticate"]
+
+
 def test_discovery_hidden_for_api_key_only(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     _enable_entra(monkeypatch)
     monkeypatch.setattr(settings, "AUTH_MODE", "api_key_only")
