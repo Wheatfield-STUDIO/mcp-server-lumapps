@@ -14,12 +14,23 @@
 
 """
 MCP Streamable HTTP transport (spec 2025-06-18).
-Single endpoint: GET and POST /mcp.
+
+GET and POST ``/mcp`` are unfiltered. The same methods on
+``/mcp/pages/{ids}``, ``/mcp/sites/{ids}``, and
+``/mcp/sites/{ids}/pages/{ids}`` apply that connection's site and page lists.
 """
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 from sse_starlette import EventSourceResponse
+from app.core.connection_scope import (
+    merge_scopes,
+    recognized_mcp_path,
+    reset_connection_scope,
+    scope_from_mcp_path,
+    scope_from_query,
+    set_connection_scope,
+)
 from app.core.security import AuthResult, validate_api_key_header_or_query
 from app.jsonrpc.models import JSONRPCRequest, JSONRPCResponse
 from app.jsonrpc.dispatcher import dispatcher
@@ -48,16 +59,40 @@ def _is_request(body: dict) -> bool:
     return "method" in body and body.get("id") is not None
 
 
-@router.get("/mcp")
+async def bind_mcp_connection_scope(request: Request):
+    """Apply the path list and any query list. The id lists are not logged."""
+    scope = merge_scopes(
+        scope_from_mcp_path(request.scope.get("path", "")),
+        scope_from_query(request.query_params),
+    )
+    token = set_connection_scope(scope)
+    try:
+        yield
+    finally:
+        reset_connection_scope(token)
+
+
+def _unknown_mcp_path(request: Request):
+    if recognized_mcp_path(request.scope.get("path", "")):
+        return None
+    return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
+
 async def mcp_get(
     request: Request,
     auth_result: AuthResult = Depends(validate_api_key_header_or_query),
+    _scope=Depends(bind_mcp_connection_scope),
+    rest: str = "",
 ):
     """
     Streamable HTTP: GET opens an SSE stream for server-to-client messages.
     Server may send JSON-RPC requests/notifications on this stream.
     """
-    logger.info("MCP GET /mcp: SSE stream opened")
+    unknown = _unknown_mcp_path(request)
+    if unknown is not None:
+        return unknown
+    del rest
+    logger.info("MCP GET: SSE stream opened")
 
     async def event_stream():
         yield {"event": "open", "data": "{}"}
@@ -78,16 +113,21 @@ async def mcp_get(
     )
 
 
-@router.post("/mcp")
 async def mcp_post(
     request: Request,
     auth_result: AuthResult = Depends(validate_api_key_header_or_query),
+    _scope=Depends(bind_mcp_connection_scope),
+    rest: str = "",
 ):
     """
     Streamable HTTP: POST sends one JSON-RPC message (request, notification, or response).
     - Request -> 200 + application/json (single response) or 202 if no body needed.
     - Notification or client response -> 202 Accepted, no body.
     """
+    unknown = _unknown_mcp_path(request)
+    if unknown is not None:
+        return unknown
+    del rest
     protocol_version = request.headers.get("mcp-protocol-version") or request.headers.get("MCP-Protocol-Version")
     if protocol_version and protocol_version not in SUPPORTED_VERSIONS:
         return JSONResponse(
@@ -108,9 +148,9 @@ async def mcp_post(
         body = await request.json()
         method = body.get("method") if isinstance(body, dict) else None
         req_id = body.get("id") if isinstance(body, dict) else None
-        logger.info("MCP POST /mcp: method=%s id=%s", method, req_id)
+        logger.info("MCP POST: method=%s id=%s", method, req_id)
     except Exception as e:
-        logger.warning(f"Invalid JSON body: {e}")
+        logger.warning("Invalid JSON body")
         return JSONResponse(
             status_code=400,
             content={
@@ -170,7 +210,7 @@ async def mcp_post(
                 "id": body.get("id"),
                 "error": {
                     "code": JSONRPCCodes.INVALID_REQUEST,
-                    "message": str(e),
+                    "message": "Invalid JSON-RPC request",
                 },
             },
             headers={"Content-Type": "application/json"},
@@ -189,3 +229,9 @@ async def mcp_post(
         headers["Mcp-Session-Id"] = session_id
 
     return JSONResponse(content=payload, status_code=200, headers=headers)
+
+
+router.add_api_route("/mcp", mcp_get, methods=["GET"])
+router.add_api_route("/mcp/{rest:path}", mcp_get, methods=["GET"])
+router.add_api_route("/mcp", mcp_post, methods=["POST"])
+router.add_api_route("/mcp/{rest:path}", mcp_post, methods=["POST"])

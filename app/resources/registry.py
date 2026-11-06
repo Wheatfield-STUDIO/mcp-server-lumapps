@@ -113,7 +113,7 @@ def read_resource_content(uri: str) -> Dict[str, Any]:
     except FileNotFoundError:
         raise MCPResourceNotFoundError("Resource file not found", uri=uri)
     except OSError as e:
-        raise MCPResourceNotFoundError(f"Cannot read resource: {e}", uri=uri)
+        raise MCPResourceNotFoundError("Cannot read resource", uri=uri)
     return {
         "contents": [
             {

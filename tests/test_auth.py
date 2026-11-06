@@ -63,7 +63,12 @@ def test_post_mcp_with_api_key_succeeds(client: TestClient) -> None:
     assert r.status_code == 200
     data = r.json()
     assert "result" in data
-    assert data["result"].get("protocolVersion") == "2025-06-18"
+    result = data["result"]
+    assert result.get("protocolVersion") == "2025-06-18"
+    assert result["serverInfo"]["version"] == "1.1.0"
+    assert "prompts" not in result["capabilities"]
+    assert "logging" not in result["capabilities"]
+    assert result["capabilities"]["tools"]["listChanged"] is False
 
 
 def test_post_mcp_with_bearer_api_key_succeeds(client: TestClient) -> None:
@@ -82,22 +87,8 @@ def test_post_mcp_with_bearer_api_key_succeeds(client: TestClient) -> None:
     assert "result" in r.json()
 
 
-def test_post_root_without_auth_returns_401(client: TestClient) -> None:
-    """POST / with JSON-RPC body but no auth returns 401."""
-    r = client.post(
-        "/",
-        json={
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {},
-        },
-    )
-    assert r.status_code == 401
-
-
-def test_post_root_with_api_key_succeeds(client: TestClient) -> None:
-    """POST / with valid API key accepts JSON-RPC (same auth as /mcp)."""
+def test_post_root_is_not_an_mcp_endpoint(client: TestClient) -> None:
+    """POST / is not an MCP door. Copilot Studio uses POST /mcp."""
     r = client.post(
         "/",
         headers={"X-API-Key": "test-mcp-api-key"},
@@ -108,8 +99,7 @@ def test_post_root_with_api_key_succeeds(client: TestClient) -> None:
             "params": {},
         },
     )
-    assert r.status_code == 200
-    assert r.json().get("result", {}).get("protocolVersion") == "2025-06-18"
+    assert r.status_code == 405
 
 
 def test_invalid_api_key_returns_401(client: TestClient) -> None:

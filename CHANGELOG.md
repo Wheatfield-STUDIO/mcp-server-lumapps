@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Copilot Studio OAuth discovery for Microsoft Entra ID.** With `ENTRA_TENANT_ID` (or an Entra `OIDC_ISSUER_URL`) and `AUTH_MODE=oidc_preferred`, the server publishes RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp`, and RFC 8414 authorization-server metadata at `/.well-known/oauth-authorization-server`. Authorize, token, and refresh URLs point at `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/...`. Unauthenticated MCP calls advertise that metadata in `WWW-Authenticate`. There is no dynamic client registration endpoint.
+- **Entra access-token validation.** Bearer tokens are still checked with the OIDC path (signature, issuer, audience, expiry). v1 (`https://sts.windows.net/{tenant}/`) and v2 issuers are both accepted for the configured tenant. `aud` may be the Application ID URI (`api://{app-id}`) or the app id GUID. `user_email` is taken from `email`, `upn`, `preferred_username`, or `unique_name`.
+- **Per-connection site and page filters** on `GET /mcp` and `POST /mcp`: `sites` and `pages` query parameters. Absent does not filter. Present but empty allows nothing. When both are set, a page must be in `pages` and on an allowed site. The id lists are not logged.
+- **Path form of the same filter** for Copilot Studio: `/mcp/pages/{ids}`, `/mcp/sites/{ids}`, and `/mcp/sites/{ids}/pages/{ids}`. Copilot replaces the server URL with the protected-resource `resource`, which drops a query string. The matching `/.well-known/oauth-protected-resource/...` document advertises the full scoped path. Bare `/mcp` stays unfiltered.
+
+### Security
+
+- **Query-string API keys are rejected.** `apiKey` and `token` on the query string return 401, including when a valid `X-API-Key` header is also present. The `X-API-Key` header remains the API-key fallback. RBAC defaults are unchanged.
+- **An API key cannot call tools.** `tools/call` requires an OIDC user. The client-supplied `user_email` is not forwarded to LumApps. `initialize` and `tools/list` still accept `X-API-Key` when `AUTH_ALLOW_API_KEY_FALLBACK` is true.
+- **Errors and logs no longer include LumApps response bodies, queries, or emails.** Unexpected failures return a generic message. `ValueError` messages (validation and RBAC) are still returned.
+- **Request limits.** `MCP_MAX_BODY_BYTES` (default 2 MB) and `MCP_RATE_LIMIT_PER_MINUTE` (default 600, keyed by a hash of the credential). `/docs` is off unless `EXPOSE_API_DOCS=true`.
+- **Removed the legacy SSE transport** (`/sse`, `/messages`) and **`POST /`**. Copilot Studio uses `/mcp` only.
+- **Removed `k8s/`.** Those ClusterIP manifests are not the Azure Container Apps path.
+- **Dependencies are pinned.** `pytest` is in `requirements-dev.txt` and is not installed in the image. `python-slugify` was unused and is gone.
+
+### Changed
+
+- `initialize` reports server version `1.1.0` and only the tools and resources capabilities that exist.
+- Startup logs a warning when `LUMAPPS_ACCESS_TOKEN` is set, without printing the token. Leave that variable unset so each call uses the signed-in user.
+
 ## [1.1.0] - 2026-03-01
 
 ### Added

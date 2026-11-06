@@ -18,12 +18,14 @@ from typing import Any, Dict, List
 
 import logging
 
+from app.core.connection_scope import filter_site_items, get_connection_scope
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
 
 logger = logging.getLogger(__name__)
 
 TOOL_NAME = "search_site"
+TOOL_SENSITIVITY = "read"
 
 TOOL_SCHEMA = {
     "name": TOOL_NAME,
@@ -70,18 +72,22 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     if not user_email:
         raise ValueError("Missing 'user_email' argument")
 
-    logger.info(f"Executing search_site for {user_email}, name={name}, max_results={max_results}")
-    token = await lumapps_auth.get_token(user_email=user_email)
-
-    data = await lumapps_client.instance_search(
-        token=token,
-        max_results=max_results,
-        cursor=cursor,
-        name=name,
-        user_favorites_only=user_favorites_only,
-    )
-
-    items = data.get("items") or []
+    logger.info("Executing search_site max_results=%s", max_results)
+    scope = get_connection_scope()
+    if scope.blocks_all_sites():
+        items = []
+        data = {}
+    else:
+        token = await lumapps_auth.get_token(user_email=user_email)
+        data = await lumapps_client.instance_search(
+            token=token,
+            max_results=max_results,
+            cursor=cursor,
+            name=name,
+            ids=sorted(scope.sites) if scope.sites is not None else None,
+            user_favorites_only=user_favorites_only,
+        )
+        items = filter_site_items(data.get("items") or [])
     text = _format_items(items)
     more = data.get("more", False)
     next_cursor = data.get("cursor")

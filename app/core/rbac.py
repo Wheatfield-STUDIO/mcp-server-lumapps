@@ -156,7 +156,7 @@ async def _user_is_site_admin_lumapps(token: str, site_id: str) -> bool:
     try:
         user = await lumapps_client.get_front_init_user(token)
     except Exception as e:
-        logger.warning("RBAC front-init failed: %s", e)
+        logger.warning("RBAC front-init failed")
         return False
     if user.get("isSuperAdmin") is True:
         return True
@@ -265,7 +265,7 @@ async def resolve_target_site_id(
             try:
                 content = await lumapps_client.get_content(content_id, token=token)
             except Exception as e:
-                logger.warning("resolve_target_site_id get_content failed: %s", e)
+                logger.warning("resolve_target_site_id get_content failed")
                 return None
             instance = content.get("instance")
             if isinstance(instance, dict):

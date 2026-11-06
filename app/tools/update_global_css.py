@@ -19,13 +19,20 @@ from datetime import datetime, timezone
 import logging
 
 from app.core.config import settings
-from app.tools.api_error_utils import format_api_error, is_permission_denied, PERMISSION_DENIED_MESSAGE
+from app.core.connection_scope import ensure_site_in_scope
+from app.tools.api_error_utils import (
+    format_api_error,
+    is_permission_denied,
+    log_tool_failure,
+    PERMISSION_DENIED_MESSAGE,
+)
 from app.services.lumapps_auth import lumapps_auth
 from app.services.lumapps_client import lumapps_client
 
 logger = logging.getLogger(__name__)
 
 TOOL_NAME = "update_global_css"
+TOOL_SENSITIVITY = "structural"
 
 TOOL_SCHEMA = {
     "name": TOOL_NAME,
@@ -73,12 +80,13 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     if not user_email:
         raise ValueError("Missing 'user_email' argument")
 
-    logger.info(f"Executing update_global_css site_id={site_id}, append={append}")
+    ensure_site_in_scope(site_id)
+    logger.info("Executing update_global_css append=%s", append)
     try:
         token = await lumapps_auth.get_token(user_email=user_email, profile="admin")
         data = await lumapps_client.get_style_by_instance(site_id, token=token)
     except Exception as e:
-        logger.exception("update_global_css get_style_by_instance failed")
+        log_tool_failure(logger, "update_global_css get_style_by_instance failed", e)
         detail = format_api_error(e)
         return {
             "content": [
@@ -128,7 +136,7 @@ async def handle(arguments: Dict[str, Any]) -> Dict[str, Any]:
     try:
         await lumapps_client.save_style(style, token=token)
     except Exception as e:
-        logger.exception("update_global_css save_style failed")
+        log_tool_failure(logger, "update_global_css save_style failed", e)
         text = PERMISSION_DENIED_MESSAGE if is_permission_denied(e) else f"Could not save style: {format_api_error(e)}."
         return {
             "content": [{"type": "text", "text": text}]

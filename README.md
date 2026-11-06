@@ -1,307 +1,212 @@
-# LumApps MCP Server by Wheatfield Studio
+# LumApps MCP Server
 
-**MCP (Model Context Protocol) server to connect the LumApps API to AI assistants** (Microsoft Copilot Studio, Cursor, Claude, etc.). This project contributes to the MCP ecosystem by turning a LumApps intranet into an active knowledge base for AI.
+Wheatfield Studio server that exposes a LumApps intranet to Microsoft Copilot Studio over the Model Context Protocol (MCP). Copilot Studio calls this process. This process calls LumApps as the employee who signed in with Microsoft Entra ID.
 
----
+This project is not affiliated with or endorsed by LumApps.
 
-## Overview
+The client this deployment is built for is Copilot Studio on **Streamable HTTP** `POST` and `GET /mcp`. Azure Container Apps is the hosting path. The step-by-step setup is [docs/deploy-azure.md](docs/deploy-azure.md).
 
-This server exposes the LumApps API as **MCP tools**: content search, article retrieval, directory, useful links (Directory Entries), layout and style inspection, and CSS/widget style updates. Assistants can query and use your intranet content in a structured way.
+## What it does
 
-- **Protocol**: MCP (Streamable HTTP 2025-06-18, with SSE compatibility)
-- **Stack**: FastAPI, Python 3.11
-- **Authentication**: **OIDC (SSO) preferred** (Bearer JWT from Azure AD, Okta, Ping, etc.) with optional API key fallback; LumApps OAuth2 (client credentials or token) for backend
+An employee asks Copilot a question. Copilot calls a tool on this server (`search_content`, `get_content_body`, and the others listed below). The server checks the Entra access token, then asks LumApps for data **as that employee** and returns the text to Copilot.
 
----
+The server does not store intranet content. It does not collect passwords. Entra is the authorization server. This process only validates access tokens and publishes the metadata Copilot Studio reads.
 
 ## Architecture
 
+```mermaid
+flowchart LR
+  user[Employee in Copilot Studio]
+  entra[Microsoft Entra ID]
+  app[This server on Container Apps]
+  lumapps[LumApps API]
+
+  user -->|"Manual OAuth: authorize, token, refresh"| entra
+  user -->|"HTTPS POST /mcp with Bearer token"| app
+  app -->|"Validate JWT via Entra JWKS"| entra
+  app -->|"Application token for that user_email"| lumapps
 ```
-┌─────────────────┐     MCP (Streamable HTTP / SSE)     ┌──────────────────┐
-│  Cursor /       │ ◄─────────────────────────────────► │  FastAPI MCP     │
-│  Copilot Studio │         X-API-Key or Bearer         │  Server          │
-└─────────────────┘                                     └────────┬─────────┘
-                                                                 │
-                                                                 │ OAuth2 / API
-                                                                 ▼
-                                                        ┌──────────────────┐
-                                                        │  LumApps API     │
-                                                        │  (sites.lumapps) │
-                                                        └──────────────────┘
-```
 
-- **`/mcp`**: **Streamable HTTP** transport (recommended) — single GET/POST endpoint for the MCP protocol.
-- **`/sse`** + **`/messages`**: SSE transport (legacy) for older clients.
-- **MCP tools**: registered in `app/tools/` (search, content, people, useful links, layout/CSS inspection, style updates).
+| Piece | Role |
+| --- | --- |
+| Copilot Studio | MCP client. Use the **Manual** OAuth wizard. |
+| Entra ID | Issues the access token. Runs PKCE. There is no registration endpoint on this server. |
+| This process | FastAPI on port 8000. MCP at `/mcp`. Probes at `/health` and `/ready`. |
+| LumApps | Content system. The server holds a LumApps **application** credential and exchanges it, plus the email from the Entra token, for a short-lived user token. |
 
----
+That LumApps call is application impersonation (`grant_type=client_credentials` with `user_email`). It is not the employee's interactive LumApps login. The email must come from the Entra token. A caller cannot supply a different email.
 
-## Prerequisites
+## Trust boundaries
 
-- Python 3.10+
-- LumApps account with API access (client ID/secret or token)
-- API key to secure MCP server access
+1. **Entra and Copilot Studio.** Entra authenticates the employee. Copilot holds the client secret for the app registration it uses to talk to Entra. This server never sees that client secret and never sees the employee's password.
+2. **This process.** It sees the Entra access token, the employee's email, the LumApps payload for the request, and the LumApps application secrets in environment variables. Tokens are cached in memory for their lifetime. Nothing is written to a database or to disk.
+3. **LumApps.** Content, directory data, and site design live in LumApps. A read tool uses the read application (`all.read`). A content or structural tool uses the admin application (`all.admin`) and is still checked against that employee's LumApps permissions.
 
----
+An API key on this server is a **session** credential for `initialize` and `tools/list`. It is not an employee. `tools/call` with only an API key is rejected, so the key cannot choose whose LumApps data is read.
 
-## Installation
+## Authentication
+
+`AUTH_MODE=oidc_preferred` (the default) accepts a Bearer JWT from Entra. `X-API-Key` is accepted only when `AUTH_ALLOW_API_KEY_FALLBACK` is true, and only for session methods.
+
+| Check | Behavior |
+| --- | --- |
+| Signature | Entra JWKS from the v2 OpenID configuration. |
+| Issuer | v2 `https://login.microsoftonline.com/<tenant>/v2.0` and v1 `https://sts.windows.net/<tenant>/`. |
+| Audience | `OIDC_AUDIENCE` or `OIDC_CLIENT_ID`. `api://<app-id>` and the bare app id are both accepted. If Entra is configured and neither audience value is set, tokens are rejected. |
+| Tenant | `tid` must match `ENTRA_TENANT_ID` when both are GUIDs. |
+| Expiry | Rejected, with `OIDC_CLOCK_SKEW_SECONDS`. |
+| Email | `email`, then `upn`, `preferred_username`, or `unique_name`. A different `user_email` argument is rejected. |
+| Query string | `apiKey` and `token` return 401, even if a valid header is also present. |
+
+Discovery, when a tenant is configured and `AUTH_MODE` is not `api_key_only`:
+
+- `GET /.well-known/oauth-protected-resource`
+- `GET /.well-known/oauth-protected-resource/mcp`
+- `GET /.well-known/oauth-authorization-server`
+
+Authorize, token, and refresh URLs in that document point at Entra. There is no `registration_endpoint`. A 401 from `/mcp` includes `WWW-Authenticate` with `resource_metadata`.
+
+| Copilot Studio wizard | Result |
+| --- | --- |
+| Dynamic discovery | Does not attach. Entra does not publish OAuth authorization-server metadata or dynamic client registration. |
+| Dynamic (Authorization URL + Token URL) | Does not attach. That mode still requires the client to register itself. |
+| Manual | Attaches. Field values are in [docs/deploy-azure.md](docs/deploy-azure.md). |
+
+## Connection scope
+
+Copilot Studio’s connection form only has a display name. The maker puts a site or page filter in the MCP server URL. The model cannot change that URL. The id lists are not written to the logs.
+
+Use the path form. Copilot fetches `/.well-known/oauth-protected-resource/...` for the server URL and then calls the `resource` value in that document. That value used to be the origin plus `/mcp`, so `?pages=` was dropped and the search returned the user’s full LumApps rights. The path is part of the resource identifier, and the metadata for that path advertises the same path.
+
+| Server URL | What the connection can touch |
+| --- | --- |
+| `https://<hostname>/mcp` | No extra filter. LumApps user rights only. |
+| `https://<hostname>/mcp/sites/<site-id>,<site-id>` | Sites in that list, and pages that sit on those sites. |
+| `https://<hostname>/mcp/pages/<content-id>,<content-id>` | Those pages only. Site tools are unchanged, because no site list is set. |
+| `https://<hostname>/mcp/sites/<site-id>/pages/<content-id>,<content-id>` | A page must be listed and on an allowed site. |
+| `https://<hostname>/mcp/sites` or `https://<hostname>/mcp/pages` | The list is present but empty, so that dimension allows nothing. An empty site list also rejects pages, because a page would not be on an allowed site. |
+
+`GET` and `POST` of those paths apply the filter. `/.well-known/oauth-protected-resource` followed by the same path returns a document whose `resource` is that full URL, not bare `/mcp`. A list that is absent does not filter. Ids are comma-separated.
+
+`sites` and `pages` on the query string of `/mcp` still work for a client that keeps the query string. Copilot Studio does not, so the Copilot server URL is the path form, not `?pages=`. If a path and a query string both set the same list, an id has to be in both.
+
+The filter runs before a tool result is returned. Search, useful links, and site list drop anything outside the list. When a site list is set, a search hit with no site id is dropped. Get body, inspect, widget style, global CSS, and site settings reject the call before the write or the body is returned. `find_person` is a person directory, not a site or a page, so this URL filter does not apply to it. LumApps permissions still apply on top of the URL filter.
+
+## RBAC
+
+`RBAC_ENABLED` defaults to true. Read tools run for any signed-in employee. Content and structural tools also ask LumApps what that employee is allowed to do (`RBAC_USE_LUMAPPS_NATIVE`, default true):
+
+| Sensitivity | Who can run it | How it is checked |
+| --- | --- | --- |
+| Read | Any authenticated employee | Entra token only. |
+| Content | Someone who can edit that page, or a site admin | LumApps `content/get` `canEdit`, or front-init site admin. |
+| Structural | Site administrator for that site, or a LumApps global admin | LumApps front-init `instancesSuperAdmin` / `isSuperAdmin`, or `isOrgAdmin` on the LumApps user token. |
+
+`RBAC_DENY_API_KEY_FOR_NON_READ` stays true. It is no longer the only gate: every `tools/call` requires the Entra user, including read tools.
+
+Set `RBAC_USE_LUMAPPS_NATIVE=false` only if you intentionally want the older OIDC group patterns (`RBAC_ADMIN_PATTERNS`, `RBAC_CONTRIBUTOR_PATTERNS`, `RBAC_GLOBAL_ADMIN_PATTERNS`).
+
+## Data
+
+| Handled in the request | Not stored |
+| --- | --- |
+| Entra access token (validated, then discarded) | Passwords, refresh tokens, Copilot client secret |
+| Employee email from the token | A user database or an allowlist file |
+| LumApps search hits, article text, directory rows, CSS, layout | Intranet content after the response is sent |
+| LumApps user token, cached in process memory until it expires | Logs of queries, emails, or LumApps response bodies |
+
+Logs record the tool name, the LumApps path, the HTTP status, and the credential profile (`read` or `admin`). They do not record the token, the query, or the email.
+
+## Tools
+
+Each tool declares `TOOL_SENSITIVITY`. Startup checks that value against the RBAC sets. `search_lumapps` is an alias of `search_content`.
+
+| Tool | Sensitivity | What it does |
+| --- | --- | --- |
+| `search_content` | Read | Search titles and excerpts. Does not return the article body. |
+| `get_content_body` | Read | Full text of one article the employee can open. |
+| `find_person` | Read | Directory search (name, email, job, location). |
+| `get_useful_links` | Read | Curated directory links the employee can see. |
+| `search_site` | Read | Sites the employee can access. |
+| `inspect_lumapps_element` | Content | Page layout or the site stylesheet. Uses the admin LumApps application, then RBAC. |
+| `update_widget_style` | Content | Changes one widget on a page via `content/save`. |
+| `update_global_css` | Structural | Replaces or appends the site stylesheet. |
+| `update_site_global_settings` | Structural | Footer HTML and instance `<head>` scripts. |
+
+Content and structural tools are writes. Copilot is instructed, in the tool description, to show the change and wait for a yes. That instruction is not an enforcement point. RBAC is the enforcement point.
+
+Resources (`lumapps://...`) are static markdown shipped in the image: CSS variable names, layout notes, and the customizations API. They do not call LumApps.
+
+## Configuration
+
+Copy `.env.example` to `.env` for local runs. On Azure, set the same names as Container App secrets or environment variables. Names already used on Railway stay the same.
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `AUTH_MODE` | No | `oidc_preferred` (default) or `api_key_only`. |
+| `AUTH_ALLOW_API_KEY_FALLBACK` | No | Default `true`. API key can open a session. It cannot call tools. |
+| `ENTRA_TENANT_ID` | For OAuth | Tenant id or domain. Not baked into the image. |
+| `OIDC_ISSUER_URL` | No | Overrides the issuer derived from `ENTRA_TENANT_ID`. |
+| `OIDC_AUDIENCE` | For OAuth | API application ID URI or app id. |
+| `OIDC_CLIENT_ID` | No | Used as audience when `OIDC_AUDIENCE` is empty. |
+| `OIDC_SCOPES` | No | Space-separated scopes advertised to clients. Usually `api://<api-app-id>/access_as_user`. |
+| `OIDC_EMAIL_CLAIM` | No | Default `email`. |
+| `OIDC_USERNAME_CLAIM` | No | Default `preferred_username`. |
+| `OIDC_CLOCK_SKEW_SECONDS` | No | Default `60`. |
+| `MCP_PUBLIC_URL` | Recommended | Public origin, `https://<hostname>`, with no `/mcp` suffix. Used in discovery metadata. |
+| `MCP_API_KEY` | For fallback | Header `X-API-Key` or `Authorization: Bearer <key>`. |
+| `LUMAPPS_ORG_ID` | Yes | LumApps organization id. |
+| `LUMAPPS_HAUSSMANN_CELL` | No | LumApps API host. Default `https://sites.lumapps.com`. |
+| `LUMAPPS_READ_CLIENT_ID` / `LUMAPPS_READ_CLIENT_SECRET` | Yes, unless a token override is set | Read application. |
+| `LUMAPPS_CLIENT_ID` / `LUMAPPS_CLIENT_SECRET` | No | Older names for the read application. Used only when `LUMAPPS_READ_*` is empty. |
+| `LUMAPPS_ADMIN_CLIENT_ID` / `LUMAPPS_ADMIN_CLIENT_SECRET` | For writes | Admin application (`all.admin`). |
+| `LUMAPPS_ACCESS_TOKEN` | No | **Leave unset in production.** If set, every LumApps call uses this one token, including writes. Startup logs a warning and does not print the token. |
+| `LUMAPPS_USER_DIRECTORY_ID` | No | Optional directory module id for `find_person`. |
+| `SITE_BASE_URL` | No | Prefix for links returned to Copilot. |
+| `RBAC_ENABLED` | No | Default `true`. |
+| `RBAC_USE_LUMAPPS_NATIVE` | No | Default `true`. |
+| `RBAC_DENY_API_KEY_FOR_NON_READ` | No | Default `true`. Leave it on. |
+| `RBAC_ORG_ADMIN_CLAIM` | No | Default `isOrgAdmin` on the LumApps user token. |
+| `RBAC_*_PATTERNS`, `RBAC_ROLE_CLAIM` | No | Used only when native RBAC is off. |
+| `CORS_ORIGINS` | No | Extra browser origins, comma-separated. Credentials are not accepted. |
+| `MCP_MAX_BODY_BYTES` | No | Default 2000000. `0` disables the limit. |
+| `MCP_RATE_LIMIT_PER_MINUTE` | No | Default 600 per credential, per process. `0` disables it. |
+| `EXPOSE_API_DOCS` | No | Default `false`. `/docs` and `/openapi.json` stay off. |
+| `LOG_LEVEL` | No | Default `INFO`. |
+| `MAX_SEARCH_RESULTS` | No | Default `5`. |
+| `PORT` | No | Default `8000`. Railway may set this. The container honors it. |
+
+## Known limits
+
+- **Manual OAuth is the working Copilot Studio mode.** Dynamic discovery and Dynamic do not attach, because Entra has no dynamic client registration.
+- **Rate limiting is inside each replica.** It is counted on a hash of the `Authorization` or `X-API-Key` header, not on IP address, because Copilot users share Microsoft egress addresses. It does not coordinate across replicas.
+- **`LUMAPPS_ACCESS_TOKEN` bypasses per-user tokens** for every profile, including admin. Do not set it on Azure or on the Railway retest.
+- **There is no separate email allowlist.** Anyone in the tenant who can obtain a token for this API, and whom LumApps will impersonate, can call read tools. Content and structural tools still need LumApps edit or admin rights.
+- **Tool descriptions ask the model to wait for confirmation.** The server does not parse the chat. A structural tool call that passes RBAC is executed.
+- **The LumApps token cache is per process.** A restart drops it. It is not encrypted at rest because it is not at rest.
+- **OpenAPI docs are off** unless `EXPOSE_API_DOCS=true`.
+- **Legacy SSE `/sse` and `/messages`, and `POST /`, are not served.** Copilot Studio does not use them.
+
+## Run locally
 
 ```bash
-git clone https://github.com/<your-org>/lumapps-mcp-server.git
-cd lumapps-mcp-server
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+python -m pip install -r requirements-dev.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### Configuration
-
-1. Copy the example file and set your variables:
+MCP Inspector: Streamable HTTP, URL `http://localhost:8000/mcp`, header `X-API-Key` set to `MCP_API_KEY`. That header can list tools. Calling a tool requires an Entra Bearer token.
 
 ```bash
-cp .env.example .env
-# Edit .env with your values (see below)
+curl -sS http://localhost:8000/health
+curl -sS -o /dev/null -w "%{http_code}\n" -X POST http://localhost:8000/mcp \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
 ```
 
-2. **Required variables**:
-   - **Auth**: either `OIDC_ISSUER_URL` (for SSO) or `MCP_API_KEY` with `AUTH_ALLOW_API_KEY_FALLBACK=true` (see [SSO / OIDC](#sso--oidc-enterprise)).
-   - `LUMAPPS_ORG_ID`: LumApps organization ID.
-   - Either `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`), or `LUMAPPS_ACCESS_TOKEN` (for testing).
+The second command is 401 until you send `X-API-Key` or a Bearer token.
 
-3. **Optional variables**:
-   - `AUTH_MODE`: `oidc_preferred` (default) or `api_key_only`. With `api_key_only`, only `MCP_API_KEY` is accepted.
-   - `AUTH_ALLOW_API_KEY_FALLBACK`: when `oidc_preferred`, allow static API key if no Bearer token (default `true`; set `false` for SSO-only).
-   - `OIDC_ISSUER_URL`, `OIDC_AUDIENCE`, `OIDC_CLIENT_ID`, `OIDC_EMAIL_CLAIM`, `OIDC_USERNAME_CLAIM`, `OIDC_CLOCK_SKEW_SECONDS`: see [SSO / OIDC](#sso--oidc-enterprise) and `.env.example`.
-   - `MCP_PUBLIC_URL`: public server URL (e.g. devtunnel/ngrok) so clients get the correct URL in MCP events.
-   - `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`: second LumApps OAuth app with **all.admin** scope (see [Read vs admin credentials](#read-vs-admin-credentials) below).
-   - **RBAC** (see [User-level RBAC](#user-level-rbac)): `RBAC_ENABLED`, `RBAC_USE_LUMAPPS_NATIVE`, `RBAC_ORG_ADMIN_CLAIM`, and (fallback) `RBAC_ROLE_CLAIM`, `RBAC_*_PATTERNS`, `RBAC_DENY_API_KEY_FOR_NON_READ`, `RBAC_CONTENT_SITE_CACHE_*`.
-   - `CORS_ORIGINS`: extra CORS origins (comma-separated).
-   - `LOG_LEVEL`, `MAX_SEARCH_RESULTS`, etc.
-
-   **Env naming (Kubernetes/enterprise)**: For read credentials, `LUMAPPS_READ_CLIENT_ID` and `LUMAPPS_READ_CLIENT_SECRET` are preferred; when set, they take precedence over `LUMAPPS_CLIENT_ID` / `LUMAPPS_CLIENT_SECRET`. Both naming schemes are supported for backward compatibility.
-
-**Important**: never commit the `.env` file (it is listed in `.gitignore`).
-
-### Read vs admin credentials
-
-LumApps OAuth applications are created with a fixed scope: **all.read** (read-only) or **all.admin** (read + write). This server separates **end-user tools** (read) from **admin tools** (modifications) by using two credential pairs when both are configured:
-
-| Purpose                   | Env vars                                                                                                   | LumApps scope | Tools                                                                                                             |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
-| **Read (end users)**      | `LUMAPPS_READ_CLIENT_ID` + `LUMAPPS_READ_CLIENT_SECRET` (or `LUMAPPS_CLIENT_ID` + `LUMAPPS_CLIENT_SECRET`) | **all.read**  | `search_content`, `get_content_body`, `find_person`, `get_useful_links`, `search_site`                             |
-| **Admin (content + structural)** | `LUMAPPS_ADMIN_CLIENT_ID` + `LUMAPPS_ADMIN_CLIENT_SECRET`                                            | **all.admin** | `inspect_lumapps_element`, `update_widget_style`, `update_global_css`, `update_site_global_settings`                 |
-
-- **Recommended setup**: Create **two OAuth applications** in LumApps for the same organization: one with **all.read** (for end-user search and inspection), one with **all.admin** (for CSS and widget updates). Set the read app in `LUMAPPS_READ_CLIENT_ID`/`LUMAPPS_READ_CLIENT_SECRET` (or legacy `LUMAPPS_CLIENT_ID`/`LUMAPPS_CLIENT_SECRET`) and the admin app in `LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`. The server will use the read app for read tools and the admin app for modification tools; tokens are cached per user and per profile.
-- **Read-only deployment**: If you only set the read credentials, **inspect and modification tools will not work**. `inspect_lumapps_element`, `update_global_css`, `update_widget_style` and `update_site_global_settings` require the admin app; calling them without admin credentials will return a clear error.
-- **Single token (tests)**: If you set `LUMAPPS_ACCESS_TOKEN`, that token is used for both read and admin; no separate admin credentials are needed. The token must have the scope required by the tools you use (admin scope if you call modification tools).
-
----
-
-## Running
-
-### Local
-
-```bash
-uvicorn app.main:app --reload --port 8000
-```
-
-- API: <http://localhost:8000>
-- Docs: <http://localhost:8000/docs>
-- MCP endpoint (Streamable HTTP): <http://localhost:8000/mcp>
-
-### Docker
-
-```bash
-docker compose up --build
-```
-
-To build the production image only (multi-stage, non-root):
-
-```bash
-docker build -t lumapps-mcp-server:latest .
-docker run --rm -p 8000:8000 --env-file .env lumapps-mcp-server:latest
-```
-
-**Connecting clients:**
-
-- **Cursor** (local): use URL `http://localhost:8000/mcp` and the key set in `MCP_API_KEY`.
-- **Copilot Studio** cannot use localhost; it needs a **public URL**. Options:
-  - **Tunnel** (dev or demo): expose the server with [devtunnel](https://github.com/microsoft/devtunnel) or [ngrok](https://ngrok.com), then set `MCP_PUBLIC_URL` in `.env` and use the tunnel URL (e.g. `https://xxxx.devtunnels.ms/mcp`) in Copilot Studio. See [Testing with devtunnel and MCP Inspector](docs/DEVTUNNEL_INSPECTOR.md).
-  - **Production**: host the server on a real environment (e.g. Azure, AWS) and use that public base URL + `/mcp` in Copilot Studio.
-
-### Kubernetes (enterprise / on-premise)
-
-The server is containerized for orchestrated deployments. Use the manifests in `k8s/` to deploy inside your cluster.
-
-1. **Build and push the image** (replace registry/namespace as needed):
-
-   ```bash
-   docker build -t your-registry/lumapps-mcp-server:latest .
-   docker push your-registry/lumapps-mcp-server:latest
-   ```
-
-2. **Configure**:
-   - Edit `k8s/configmap.yaml` with your `LUMAPPS_ORG_ID`, `LUMAPPS_HAUSSMANN_CELL`, and other non-secret settings.
-   - Create the Secret with real credentials (do not commit them). Options:
-     - **Inline**: replace placeholders in `k8s/secrets.yaml` with real values (use `stringData` for plain text), then `kubectl apply -f k8s/secrets.yaml`.
-     - **Recommended**: create the secret from literals or a secret manager so credentials never touch the repo:  
-       `kubectl create secret generic lumapps-mcp-secrets --from-literal=MCP_API_KEY=... --from-literal=LUMAPPS_READ_CLIENT_ID=... --from-literal=LUMAPPS_READ_CLIENT_SECRET=...`  
-       Add `LUMAPPS_ADMIN_CLIENT_ID` / `LUMAPPS_ADMIN_CLIENT_SECRET` if you use modification tools.
-
-3. **Deploy**:
-   - Update `k8s/deployment.yaml` image to your registry URL if not using `lumapps-mcp-server:latest` locally.
-   - Apply in order: `kubectl apply -f k8s/configmap.yaml`, `kubectl apply -f k8s/secrets.yaml`, `kubectl apply -f k8s/deployment.yaml`, `kubectl apply -f k8s/service.yaml`.
-
-4. **Probes**: The deployment uses `/health` for liveness and `/ready` for readiness. Expose the service via Ingress or LoadBalancer as required by your environment.
-
-Credentials stay inside your perimeter; use your existing secret management (e.g. External Secrets, Vault) where possible.
-
----
-
-## Exposed MCP tools
-
-| Tool                          | Description                                                                  | Level      | LumApps credentials   |
-| ----------------------------- | ---------------------------------------------------------------------------- | ---------- | --------------------- |
-| `search_content`              | Search LumApps content (titles, excerpts, `content_id`)                      | Read       | read (all.read)        |
-| `get_content_body`            | Get full article body by `content_id`                                        | Read       | read                   |
-| `find_person`                 | Search people in the directory                                               | Read       | read                   |
-| `get_useful_links`            | Search useful links (Directory Entries: train, IT, training, etc.)           | Read       | read                   |
-| `search_site`                 | List or search LumApps sites (instances) for discovery and user confirmation | Read       | read                   |
-| `inspect_lumapps_element`     | Inspect page layout or site global CSS (API only); prepares edits           | **Content** | admin (canEdit/site admin)      |
-| `update_global_css`           | Update site global CSS                                                       | Structural | admin (all.admin)     |
-| `update_widget_style`         | Update a widget's style on a page                                            | Content    | admin + canEdit       |
-| `update_site_global_settings` | Update site footer HTML and/or head scripts                                  | Structural | admin                 |
-
-- **Level**: RBAC sensitivity. **Read** = any authenticated user. **Content** = Contributor or Admin on the page/site (inspect + widget style). **Structural** = Site Administrator only (global CSS, global settings).
-- **LumApps credentials**: **Read**-level tools use the **read** app. **Content** (`inspect_lumapps_element`, `update_widget_style`) and **Structural** tools use the **admin** app (`LUMAPPS_ADMIN_CLIENT_ID`/`LUMAPPS_ADMIN_CLIENT_SECRET`) when configured. See [Read vs admin credentials](#read-vs-admin-credentials). When [user-level RBAC](#user-level-rbac) is enabled, API key alone cannot run Content or Structural tools.
-
-### Conduct rules for modification tools
-
-The tool schemas for **`update_widget_style`**, **`update_global_css`** and **`update_site_global_settings`** instruct the AI to follow strict rules so changes are never applied without user consent:
-
-1. **Always run `inspect_lumapps_element` first** — to get accurate `content_id`/`widget_id` or to target the right elements before changing CSS.
-2. **Present the modification to the user** — describe or show what will be changed (no need to expose raw JSON or CSS unless useful).
-3. **Wait for explicit confirmation** — do not call the tool until the user has replied with "Yes" or "Confirm" (or equivalent) in the chat.
-4. **Never apply changes silently** — the AI must not invoke these tools without having obtained confirmation.
-
-These rules are embedded in the tools’ `description` in the MCP schema so that assistants (Copilot Studio, Cursor, etc.) read them and behave accordingly. Use **`search_site`** to list available sites and ask the user which one to use (e.g. "I found 'Sustainability Global' and 'Sustainability France'; which one do you want to modify?") before running modification tools.
-
----
-
-## MCP Resources
-
-Static or semi-static documentation exposed as MCP resources (clients can list and read them directly for context):
-
-| URI                                                      | Description                                                                                                   |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `lumapps://lumapps-mcp-server/css-variables`             | LumApps CSS variables reference (static doc).                                                                 |
-| `lumapps://lumapps-mcp-server/layout-and-widget-styling` | Layout (rows, cells, sticky), row/cell and widget styles (spacing, border, background, header/footer, hover). |
-| `lumapps://lumapps-mcp-server/style-and-theme`           | Site style (theme): structure, properties, stylesheets, footer/head, style/save flow.                         |
-| `lumapps://lumapps-mcp-server/customizations-api`        | Customizations API: JavaScript (targets, placements, components) and CSS (anchors, best practices).           |
-
-Content is stored in `app/resources/` and can be updated without code changes.
-
----
-
-## Security
-
-- **MCP authentication**: dual mode.
-  - **OIDC preferred** (default): send `Authorization: Bearer <user-id-token>` from your IdP (Azure AD, Okta, Ping, etc.). The server validates the JWT (signature, issuer, audience, expiry) and binds every tool call to the verified user; `user_email` is taken from token claims and must not be overridden by the client.
-  - **API key fallback**: when `AUTH_ALLOW_API_KEY_FALLBACK=true`, you can still use `X-API-Key`, `Authorization: Bearer <static-key>`, or query `apiKey` / `token` with `MCP_API_KEY`. For production SSO-only, set `AUTH_ALLOW_API_KEY_FALLBACK=false`. When [user-level RBAC](#user-level-rbac) is enabled, API key alone is **read-only**: Content and Structural tools are denied and require OIDC identity.
-- **Root endpoint**: `GET /` is unauthenticated (info only). `POST /` accepts JSON-RPC only when authenticated (same as `/mcp`).
-- **Secrets**: no hardcoded secrets; everything comes from config (`pydantic-settings` + `.env`).
-- **`.env`**: for local development only; must not be versioned. In production use environment variables or a secrets store.
-
-### User-level RBAC
-
-The server enforces **user-level** role checks so that LumApps governance is respected when using AI agents. When **`RBAC_USE_LUMAPPS_NATIVE=true`** (default), permissions are based on **LumApps native APIs** and **OIDC**, avoiding reliance on a single "all.admin" token:
-
-- **Global Admin (Platform)**: **LumApps user token** payload (the token obtained via impersonation) must contain **`isOrgAdmin: true`** (configurable via `RBAC_ORG_ADMIN_CLAIM`). That token is generated from OAuth2 client credentials + user email; the claim comes from LumApps, not from the OIDC JWT.
-- **Site Admin (Structural tools)**: LumApps **`GET service/front-init?fields=user`** returns `user.instancesSuperAdmin` (site IDs where the user is admin) and `user.isSuperAdmin`. The user must be in that list (or `isSuperAdmin`) for `update_global_css` and `update_site_global_settings`.
-- **Content Editor (Content tools)**: LumApps **`GET content/get?uid=...&fields=canEdit`** returns whether the user can edit that page. Used for `inspect_lumapps_element` and `update_widget_style` when targeting a specific content; when only a site is targeted (e.g. inspect global CSS), Site Admin is required.
-
-**Read tools** remain available to any authenticated user (API key or OIDC). If LumApps returns 401/403 on a write, the server returns a secure, governance-friendly message. In native mode, if the LumApps user token cannot be obtained for RBAC checks, access is denied (fail-closed). A short-lived cache resolves `content_id` → `site_id` for widget updates.
-
-When **`RBAC_USE_LUMAPPS_NATIVE=false`**, the server falls back to **OIDC role patterns** (`RBAC_ADMIN_PATTERNS`, `RBAC_CONTRIBUTOR_PATTERNS`, `RBAC_GLOBAL_ADMIN_PATTERNS`) with `{site_id}` substitution.
-
-#### Configuring OIDC for RBAC fallback
-
-When using the fallback (no LumApps API for roles), the server reads a **role claim** from the JWT (default: `groups`) and matches its values against the configured patterns. Configure your IdP (Azure AD, Okta, Ping, etc.) so that the token contains the right values:
-
-| Goal | Claim (default `groups`) must contain | Example value |
-|------|----------------------------------------|---------------|
-| **Global Admin** (all tools) | One of `RBAC_GLOBAL_ADMIN_PATTERNS` | `lumapps:site:*:admin` or `lumapps:global:admin` |
-| **Site Admin** (structural tools for a site) | Pattern with concrete `site_id` from `RBAC_ADMIN_PATTERNS` | `lumapps:site:abc123:admin` |
-| **Contributor / Content** (content tools for a site) | Pattern from `RBAC_CONTRIBUTOR_PATTERNS` | `lumapps:site:abc123:contributor` or `lumapps:site:abc123:admin` |
-
-- **Claim name**: Set `RBAC_ROLE_CLAIM` to the claim that holds the list (e.g. `groups`, `roles`, or a custom claim like `lumapps_roles`).
-- **Pattern format**: Patterns use `{site_id}` as placeholder. The server replaces it with the target site ID and checks for an **exact match** in the claim values. For Global Admin, use literal values without placeholder (e.g. `lumapps:site:*:admin`).
-- **IdP setup**: In Azure AD, map LumApps site/role data to group membership or to a custom claim (e.g. via claims mapping policy or SAML/SCIM). In Okta, use groups or a custom claim. Ensure the token actually contains strings like `lumapps:site:<siteId>:admin` for each site where the user is admin.
-
-Example: for a user who is Site Admin on site `prod-portal` and Contributor on site `marketing`, the JWT claim (e.g. `groups`) should include at least `lumapps:site:prod-portal:admin` and `lumapps:site:marketing:contributor` (or `lumapps:site:marketing:admin`).
-
-### SSO / OIDC (enterprise)
-
-To use corporate SSO and tie every action to a verified human identity:
-
-1. Set **`OIDC_ISSUER_URL`** to your IdP’s issuer (e.g. `https://login.microsoftonline.com/<tenant>/v2.0` for Microsoft Entra ID).
-2. Optionally set **`OIDC_DISCOVERY_URL`** if discovery is not at `{OIDC_ISSUER_URL}/.well-known/openid-configuration`.
-3. Set **`OIDC_AUDIENCE`** and/or **`OIDC_CLIENT_ID`** to the values your IdP expects in the token’s `aud` claim.
-4. Configure **`OIDC_EMAIL_CLAIM`** and **`OIDC_USERNAME_CLAIM`** if your IdP uses different claim names (defaults: `email`, `preferred_username`).
-5. Have the MCP client (Copilot Studio, Cursor, etc.) obtain an identity token for the current user and send it as `Authorization: Bearer <token>` on each request.
-
-The server then uses the token’s claims to resolve `user_email` for LumApps; client-supplied `user_email` in tool arguments is ignored or rejected when it does not match the token. This meets GDPR/SOC2-style requirements for user identification and revocation.
-
----
-
-## Demos
-
-Videos are in **`assets/videos/`** (tracked with Git LFS). Main recap:
-
-<video src="assets/videos/lumapps-mcp-master-recap.mp4" controls width="100%">
-  Your browser does not support the video tag.
-</video>
-
-| Feature       | Video                                                                                |
-| ------------- | ------------------------------------------------------------------------------------ |
-| **Search**    | [01-deep-content-search.mp4](assets/videos/01-deep-content-search.mp4)               |
-| **People**    | [02-people-expertise-discovery.mp4](assets/videos/02-people-expertise-discovery.mp4) |
-| **Links**     | [03-smart-intent-links.mp4](assets/videos/03-smart-intent-links.mp4)                 |
-| **Drafting**  | [04-ai-content-drafting.mp4](assets/videos/04-ai-content-drafting.mp4)               |
-| **Design**    | [05-visual-layout-engineering.mp4](assets/videos/05-visual-layout-engineering.mp4)   |
-| **Architect** | [06-global-site-architecture.mp4](assets/videos/06-global-site-architecture.mp4)     |
-
----
-
-## Tests
-
-Auth and endpoint regression tests live in `tests/`. Run them with:
-
-```bash
-pip install -r requirements.txt
-python -m pytest tests/ -v
-```
-
-Requires minimal env (or defaults in `tests/conftest.py`): `MCP_API_KEY`, `LUMAPPS_ORG_ID`, and LumApps read credentials so the app starts.
-
----
-
-## Further documentation
-
-- [Testing with devtunnel and MCP Inspector](docs/DEVTUNNEL_INSPECTOR.md) — running behind a tunnel and using the MCP Inspector.
-
----
+Tests: `python -m pytest tests/ -q`.
 
 ## License
 
-This project is open source under the [Apache License 2.0](LICENSE).
-
----
-
-## Contributing
-
-Contributions are welcome (issues, pull requests). Please read [CONTRIBUTING.md](CONTRIBUTING.md) for how to test your changes with the MCP Inspector before submitting. For larger changes, open an issue first to discuss.
-
----
-
-_Disclaimer: This is a community-driven project and is not officially affiliated with or endorsed by LumApps._
+Apache License 2.0. See [LICENSE](LICENSE).

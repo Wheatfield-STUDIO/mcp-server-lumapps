@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from typing import Callable, Dict, Any, Awaitable
+import httpx
 from app.jsonrpc.models import JSONRPCRequest, JSONRPCResponse, JSONRPCErrorDetail
 from app.jsonrpc.errors import JSONRPCCodes, MCPResourceNotFoundError
 import logging
@@ -51,14 +52,34 @@ class JSONRPCDispatcher:
                     data={"uri": e.uri} if e.uri is not None else None,
                 ),
             )
-        except Exception as e:
-            logger.exception(f"Error dispatching method {request.method}")
+        except ValueError as e:
+            logger.info("Rejected JSON-RPC method %s", request.method)
             return JSONRPCResponse(
                 id=request.id,
                 error=JSONRPCErrorDetail(
                     code=JSONRPCCodes.INTERNAL_ERROR,
-                    message=str(e)
+                    message=str(e),
+                ),
+            )
+        except Exception as e:
+            if isinstance(e, httpx.HTTPStatusError):
+                logger.error(
+                    "Error dispatching method %s (HTTP %s)",
+                    request.method,
+                    e.response.status_code,
                 )
+            else:
+                logger.error(
+                    "Error dispatching method %s (%s)",
+                    request.method,
+                    type(e).__name__,
+                )
+            return JSONRPCResponse(
+                id=request.id,
+                error=JSONRPCErrorDetail(
+                    code=JSONRPCCodes.INTERNAL_ERROR,
+                    message="The server could not complete this request.",
+                ),
             )
 
 dispatcher = JSONRPCDispatcher()
